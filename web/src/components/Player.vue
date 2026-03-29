@@ -30,18 +30,25 @@
         @input="onVolumeChange"
         class="volume-slider"
       />
+      <button class="control-btn" @click="showQueue = !showQueue">
+        <Icon icon="mdi:playlist-music" />
+      </button>
       <RouterLink to="/lyrics" class="control-btn lyrics-btn">
         <Icon icon="mdi:microphone" />
       </RouterLink>
     </div>
+    <Queue :open="showQueue" @close="showQueue = false" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { Icon } from '@iconify/vue';
 import { usePlayerStore } from '../stores/player.js';
 import CoverArt from './CoverArt.vue';
+import Queue from './Queue.vue';
+
+const showQueue = ref(false);
 
 const store = usePlayerStore();
 const activeBot = computed(() => store.activeBot);

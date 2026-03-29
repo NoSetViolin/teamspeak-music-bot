@@ -54,11 +54,9 @@ import { ref, onMounted } from 'vue';
 import { Icon } from '@iconify/vue';
 import axios from 'axios';
 import { usePlayerStore } from '../stores/player.js';
-import { useWebSocket } from '../composables/useWebSocket.js';
 import CoverArt from '../components/CoverArt.vue';
 
 const store = usePlayerStore();
-const { connect } = useWebSocket();
 
 interface Playlist {
   id: string;
@@ -70,10 +68,6 @@ interface Playlist {
 const playlists = ref<Playlist[]>([]);
 
 onMounted(async () => {
-  store.loadTheme();
-  connect();
-  await store.fetchBots();
-
   try {
     const res = await axios.get('/api/music/recommend/playlists');
     playlists.value = res.data.playlists;
