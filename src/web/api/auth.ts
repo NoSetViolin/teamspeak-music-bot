@@ -1,11 +1,13 @@
 import { Router } from "express";
 import type { MusicProvider } from "../../music/provider.js";
+import type { CookieStore } from "../../music/auth.js";
 import type { Logger } from "../../logger.js";
 
 export function createAuthRouter(
   neteaseProvider: MusicProvider,
   qqProvider: MusicProvider,
-  logger: Logger
+  logger: Logger,
+  cookieStore?: CookieStore
 ): Router {
   const router = Router();
 
@@ -18,8 +20,10 @@ export function createAuthRouter(
       const platform = req.query.platform as string;
       const provider = getProvider(platform);
       const status = await provider.getAuthStatus();
+      logger.debug({ platform, status }, "Auth status check");
       res.json({ platform: provider.platform, ...status });
     } catch (err) {
+      logger.error({ err }, "Auth status check failed");
       res.status(500).json({ error: (err as Error).message });
     }
   });
@@ -29,6 +33,7 @@ export function createAuthRouter(
       const { platform } = req.body;
       const provider = getProvider(platform);
       const qr = await provider.getQrCode();
+      logger.info({ platform, key: qr.key }, "QR code generated");
       res.json(qr);
     } catch (err) {
       logger.error({ err }, "QR code generation failed");
@@ -45,8 +50,21 @@ export function createAuthRouter(
       }
       const provider = getProvider(platform as string);
       const status = await provider.checkQrCodeStatus(key as string);
+      logger.info({ platform, status, key }, "QR status check");
+
+      // When confirmed, persist cookie
+      if (status === "confirmed") {
+        const cookie = provider.getCookie();
+        const plat = (platform as string) === "qq" ? "qq" as const : "netease" as const;
+        if (cookie && cookieStore) {
+          cookieStore.save(plat, cookie);
+          logger.info({ platform: plat }, "Cookie persisted to disk");
+        }
+      }
+
       res.json({ status });
     } catch (err) {
+      logger.error({ err }, "QR status check failed");
       res.status(500).json({ error: (err as Error).message });
     }
   });
@@ -83,6 +101,9 @@ export function createAuthRouter(
         return;
       }
       const success = await neteaseProvider.loginWithSms(phone, code);
+      if (success && cookieStore) {
+        cookieStore.save("netease", neteaseProvider.getCookie());
+      }
       res.json({ success });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
@@ -97,6 +118,10 @@ export function createAuthRouter(
     }
     const provider = getProvider(platform);
     provider.setCookie(cookie);
+    const plat = platform === "qq" ? "qq" as const : "netease" as const;
+    if (cookieStore) {
+      cookieStore.save(plat, cookie);
+    }
     res.json({ success: true });
   });
 

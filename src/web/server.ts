@@ -7,6 +7,7 @@ import type { MusicProvider } from "../music/provider.js";
 import type { BotDatabase } from "../data/database.js";
 import type { BotConfig } from "../data/config.js";
 import type { Logger } from "../logger.js";
+import type { CookieStore } from "../music/auth.js";
 import { createBotRouter } from "./api/bot.js";
 import { createMusicRouter } from "./api/music.js";
 import { createPlayerRouter } from "./api/player.js";
@@ -21,6 +22,7 @@ export interface WebServerOptions {
   database: BotDatabase;
   config: BotConfig;
   logger: Logger;
+  cookieStore?: CookieStore;
   staticDir?: string;
 }
 
@@ -47,7 +49,7 @@ export function createWebServer(options: WebServerOptions): WebServer {
   app.use("/api/player", createPlayerRouter(options.botManager, logger));
   app.use(
     "/api/auth",
-    createAuthRouter(options.neteaseProvider, options.qqProvider, logger)
+    createAuthRouter(options.neteaseProvider, options.qqProvider, logger, options.cookieStore)
   );
 
   app.get("/api/health", (_req, res) => {

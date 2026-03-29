@@ -277,18 +277,22 @@ async function startQrLogin(platform: string) {
 
   try {
     const res = await axios.post('/api/auth/qrcode', { platform });
-    const { qrUrl, key } = res.data;
+    const { qrUrl, qrImg, key } = res.data;
     qr.key = key;
 
-    // Generate QR code image
-    qr.dataUrl = await QRCode.toDataURL(qrUrl, {
-      width: 200,
-      margin: 2,
-      color: {
-        dark: store.theme === 'dark' ? '#ffffff' : '#000000',
-        light: store.theme === 'dark' ? '#2a2a2a' : '#ffffff',
-      },
-    });
+    // Use server-generated QR image if available, otherwise generate client-side
+    if (qrImg) {
+      qr.dataUrl = qrImg;
+    } else {
+      qr.dataUrl = await QRCode.toDataURL(qrUrl, {
+        width: 200,
+        margin: 2,
+        color: {
+          dark: store.theme === 'dark' ? '#ffffff' : '#000000',
+          light: store.theme === 'dark' ? '#2a2a2a' : '#ffffff',
+        },
+      });
+    }
 
     qr.loading = false;
 

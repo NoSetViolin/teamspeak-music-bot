@@ -43,6 +43,7 @@ export interface SearchResult {
 
 export interface QrCodeResult {
   qrUrl: string;
+  qrImg?: string; // base64 data URL of QR image
   key: string;
 }
 

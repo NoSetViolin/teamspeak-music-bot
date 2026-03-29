@@ -58,6 +58,7 @@ async function main() {
     database: db,
     config,
     logger,
+    cookieStore,
     staticDir: STATIC_DIR,
   });
   await webServer.start();

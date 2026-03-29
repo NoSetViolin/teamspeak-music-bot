@@ -188,13 +188,16 @@ export class NeteaseProvider implements MusicProvider {
   }
 
   async getQrCode(): Promise<QrCodeResult> {
-    const keyRes = await this.api.get("/login/qr/key");
+    const keyRes = await this.api.get("/login/qr/key", {
+      params: { timestamp: Date.now() },
+    });
     const key = keyRes.data?.data?.unikey ?? "";
     const createRes = await this.api.get("/login/qr/create", {
       params: { key, qrimg: true },
     });
     return {
       qrUrl: createRes.data?.data?.qrurl ?? "",
+      qrImg: createRes.data?.data?.qrimg ?? "",
       key,
     };
   }
@@ -203,7 +206,7 @@ export class NeteaseProvider implements MusicProvider {
     key: string
   ): Promise<"waiting" | "scanned" | "confirmed" | "expired"> {
     const res = await this.api.get("/login/qr/check", {
-      params: { key },
+      params: { key, timestamp: Date.now() },
     });
     const code = res.data?.code;
     switch (code) {
