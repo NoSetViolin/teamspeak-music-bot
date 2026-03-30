@@ -40,14 +40,22 @@ export function createApiServerManager(
 
       // Start NetEase Cloud Music API
       try {
-        const ncmModule = await import("NeteaseCloudMusicApi") as any;
-        const serverObj = ncmModule.server ?? ncmModule.default?.server;
-        const app = await serverObj.serveNcmApi({ port: options.neteasePort });
-        neteaseServer = app;
-        logger.info(
-          { port: options.neteasePort },
-          "NetEase Cloud Music API started"
-        );
+        const portFree = await isPortFree(options.neteasePort);
+        if (!portFree) {
+          logger.info(
+            { port: options.neteasePort },
+            "NetEase API port already in use — reusing existing instance"
+          );
+        } else {
+          const ncmModule = await import("NeteaseCloudMusicApi") as any;
+          const serverObj = ncmModule.server ?? ncmModule.default?.server;
+          const app = await serverObj.serveNcmApi({ port: options.neteasePort });
+          neteaseServer = app;
+          logger.info(
+            { port: options.neteasePort },
+            "NetEase Cloud Music API started"
+          );
+        }
       } catch (err) {
         logger.error({ err }, "Failed to start NetEase Cloud Music API");
       }

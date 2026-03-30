@@ -1001,6 +1001,12 @@ onUnmounted(() => {
   align-items: center;
 }
 
+.create-bot {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-color);
+}
+
 .form-group {
   margin-bottom: 12px;
   label {
