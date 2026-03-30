@@ -81,10 +81,13 @@
 
     <!-- 我的歌单 -->
     <section class="section" v-if="store.userPlaylists.length > 0">
-      <h2 class="section-title">我的歌单</h2>
+      <h2 class="section-title">
+        我的歌单
+        <span class="section-count">{{ store.userPlaylists.length }}</span>
+      </h2>
       <div class="playlist-grid">
         <RouterLink
-          v-for="pl in store.userPlaylists"
+          v-for="pl in visibleUserPlaylists"
           :key="pl.id"
           :to="`/playlist/${pl.id}?platform=${pl.platform}`"
           class="playlist-card hover-scale"
@@ -94,6 +97,14 @@
           <div class="playlist-count">{{ pl.songCount }} 首</div>
         </RouterLink>
       </div>
+      <button
+        v-if="store.userPlaylists.length > USER_PLAYLIST_LIMIT"
+        class="expand-btn"
+        @click="userPlaylistsExpanded = !userPlaylistsExpanded"
+      >
+        <Icon :icon="userPlaylistsExpanded ? 'mdi:chevron-up' : 'mdi:chevron-down'" />
+        {{ userPlaylistsExpanded ? '收起' : `展开全部 ${store.userPlaylists.length} 个歌单` }}
+      </button>
     </section>
 
     <!-- B站热门 -->
@@ -119,13 +130,20 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { Icon } from '@iconify/vue';
 import axios from 'axios';
 import { usePlayerStore, type Song } from '../stores/player.js';
 import CoverArt from '../components/CoverArt.vue';
 
 const store = usePlayerStore();
+const USER_PLAYLIST_LIMIT = 20;
+const userPlaylistsExpanded = ref(false);
+const visibleUserPlaylists = computed(() =>
+  userPlaylistsExpanded.value
+    ? store.userPlaylists
+    : store.userPlaylists.slice(0, USER_PLAYLIST_LIMIT)
+);
 
 async function playFm() {
   try {
@@ -205,6 +223,33 @@ onMounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.section-count {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-tertiary);
+}
+
+.expand-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 100%;
+  padding: 10px;
+  margin-top: 12px;
+  background: var(--bg-card);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  transition: all var(--transition-fast);
+
+  &:hover {
+    background: var(--hover-bg);
+    color: var(--color-primary);
+  }
 }
 
 .bili-badge {
