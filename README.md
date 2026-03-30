@@ -307,7 +307,7 @@ A：`git pull` 拉取最新代码，然后 `npm install && npm run build && npm 
 | 项目 | 说明 |
 |------|------|
 | [Splamy/TS3AudioBot](https://github.com/Splamy/TS3AudioBot) | 优秀的 TeamSpeak 音频机器人框架 |
-| [TS3AudioBot-BiliBiliPlugin](https://github.com/Flavor-Scrap/TS3AudioBot-BiliBiliPlugin) | 提供插件开发参考 |
+| [TS3AudioBot-BiliBiliPlugin]([https://github.com/Flavor-Scrap/TS3AudioBot-BiliBiliPlugin](https://github.com/xxmod/TS3AudioBot-BiliBiliPlugin)) | 提供插件开发参考 |
 | [TS3AudioBot-NetEaseCloudmusic-plugin](https://github.com/ZHANGTIANYAO1/TS3AudioBot-NetEaseCloudmusic-plugin) | 提供插件开发参考和懒加载设计参考 |
 | [TS3AudioBot-CloudMusic-plugin](https://github.com/DJmouton/TS3AudioBot-CloudMusic-plugin) | 提供插件开发参考 |
 | [TS3AudioBot-Plugin-Netease-QQ](https://github.com/scheissegansen/TS3AudioBot-Plugin-Netease-QQ) | 提供插件开发参考 |
