@@ -26,5 +26,11 @@ export function createLogger(logDir?: string): Logger {
     ],
   });
 
+  // Prevent EINTR errors from crashing the process (known pino/thread-stream issue on Linux)
+  transport.on("error", (err: Error) => {
+    if ((err as NodeJS.ErrnoException).code === "EINTR") return;
+    console.error("Logger transport error:", err);
+  });
+
   return pino({ level: "debug" }, transport);
 }
