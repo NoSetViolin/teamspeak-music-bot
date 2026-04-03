@@ -6,8 +6,18 @@ echo "║       TSMusicBot Installer           ║"
 echo "╚══════════════════════════════════════╝"
 echo ""
 
+# Resolve script location → project root
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 INSTALL_DIR="/opt/tsmusicbot"
 SERVICE_NAME="tsmusicbot"
+
+# Verify we're in a valid project directory
+if [ ! -f "$PROJECT_DIR/package.json" ]; then
+    echo "Error: Cannot find package.json in $PROJECT_DIR"
+    echo "Please run this script from the TSMusicBot project directory."
+    exit 1
+fi
 
 # Detect OS
 if [ -f /etc/os-release ]; then
@@ -18,44 +28,57 @@ else
     exit 1
 fi
 
-echo "[1/5] Installing system dependencies..."
+echo "[1/6] Installing system dependencies..."
 case $OS in
     ubuntu|debian)
         sudo apt-get update -qq
-        sudo apt-get install -y -qq curl ffmpeg
+        sudo apt-get install -y -qq curl build-essential python3
         ;;
     centos|rhel|fedora)
-        sudo yum install -y curl ffmpeg
+        sudo yum install -y curl gcc gcc-c++ make python3
         ;;
     arch|manjaro)
-        sudo pacman -S --noconfirm curl ffmpeg
+        sudo pacman -S --noconfirm curl base-devel python
         ;;
     *)
-        echo "Unsupported OS: $OS. Please install Node.js 20 and FFmpeg manually."
+        echo "Unsupported OS: $OS. Please install Node.js 20, build tools, and FFmpeg manually."
         ;;
 esac
 
-echo "[2/5] Installing Node.js 20 LTS..."
+echo "[2/6] Installing Node.js 20 LTS..."
 if ! command -v node &> /dev/null || [[ $(node -v | cut -d. -f1 | tr -d 'v') -lt 20 ]]; then
     curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
     sudo apt-get install -y -qq nodejs 2>/dev/null || sudo yum install -y nodejs 2>/dev/null
 fi
 echo "Node.js $(node -v) installed"
 
-echo "[3/5] Downloading TSMusicBot..."
-sudo mkdir -p "$INSTALL_DIR"
-if [ -d "$(pwd)/dist" ]; then
-    sudo cp -r "$(pwd)"/* "$INSTALL_DIR/"
-else
-    echo "Please run this script from the TSMusicBot source directory after building."
-    exit 1
+echo "[3/6] Installing dependencies..."
+cd "$PROJECT_DIR"
+npm install
+if [ -d "$PROJECT_DIR/web/package.json" ] || [ -f "$PROJECT_DIR/web/package.json" ]; then
+    (cd "$PROJECT_DIR/web" && npm install)
 fi
 
-echo "[4/5] Installing npm dependencies..."
-cd "$INSTALL_DIR"
-sudo npm install --production
+echo "[4/6] Building project..."
+npm run build
 
-echo "[5/5] Creating systemd service..."
+echo "[5/6] Copying to $INSTALL_DIR..."
+sudo mkdir -p "$INSTALL_DIR"
+sudo cp -r "$PROJECT_DIR/dist" "$INSTALL_DIR/"
+sudo cp -r "$PROJECT_DIR/node_modules" "$INSTALL_DIR/"
+sudo cp "$PROJECT_DIR/package.json" "$INSTALL_DIR/"
+# Copy web frontend if built
+if [ -d "$PROJECT_DIR/web/dist" ]; then
+    sudo mkdir -p "$INSTALL_DIR/web"
+    sudo cp -r "$PROJECT_DIR/web/dist" "$INSTALL_DIR/web/"
+fi
+# Copy scripts for future use
+sudo mkdir -p "$INSTALL_DIR/scripts"
+sudo cp -r "$PROJECT_DIR/scripts/"* "$INSTALL_DIR/scripts/" 2>/dev/null || true
+# Create data directory
+sudo mkdir -p "$INSTALL_DIR/data"
+
+echo "[6/6] Creating systemd service..."
 sudo tee /etc/systemd/system/${SERVICE_NAME}.service > /dev/null <<EOL
 [Unit]
 Description=TSMusicBot - TeamSpeak Music Bot
@@ -88,4 +111,5 @@ echo "║    Commands:                          ║"
 echo "║    systemctl status tsmusicbot       ║"
 echo "║    systemctl restart tsmusicbot      ║"
 echo "║    systemctl stop tsmusicbot         ║"
+echo "║    journalctl -u tsmusicbot -f       ║"
 echo "╚══════════════════════════════════════╝"
