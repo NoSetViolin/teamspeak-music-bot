@@ -10,7 +10,6 @@ import {
   type Identity,
   type TextMessage,
   type ClientInfo,
-  type CommandMiddleware,
 } from "@honeybbq/teamspeak-client";
 import type { Logger } from "../logger.js";
 import {
@@ -18,7 +17,7 @@ import {
   type ServerProtocol,
 } from "./protocol-detect.js";
 import { TS6HttpQuery } from "./http-query.js";
-import { ts6VersionMiddleware } from "./ts6-compat.js";
+import { patchClientInitVersion } from "./ts6-compat.js";
 
 export { CODEC_OPUS_MUSIC } from "./voice.js";
 export type { ServerProtocol } from "./protocol-detect.js";
@@ -154,13 +153,6 @@ export class TS3Client extends EventEmitter {
       this.logger.warn(msg);
     };
 
-    // Apply TS6 version middleware if connecting to a TS6 server
-    const commandMiddleware: CommandMiddleware[] = [];
-    if (this.detectedProtocol === "ts6") {
-      commandMiddleware.push(ts6VersionMiddleware("3.6.2"));
-      this.logger.info("Applying TS6 compatibility: upgrading client_version to 3.6.2");
-    }
-
     this.client = new TS3FullClient(this.identity, addr, this.options.nickname, {
       logger: {
         debug: (msg) => this.logger.debug(msg),
@@ -168,8 +160,29 @@ export class TS3Client extends EventEmitter {
         warn: throttledWarn,
         error: (msg) => this.logger.error(msg),
       },
-      commandMiddleware,
     });
+
+    // Patch handler.sendPacket to intercept clientinit during handshake for TS6.
+    // The library's commandMiddleware only applies to post-connection commands
+    // (sendCommandNoWait/execCommand), but the handshake's clientinit is sent
+    // directly via handler.sendPacket, bypassing middleware entirely.
+    // This monkey-patch ensures the version is upgraded for TS6 servers.
+    if (this.detectedProtocol === "ts6") {
+      this.logger.info("Applying TS6 compatibility: upgrading client_version to 3.6.2");
+      const origSendPacket = this.client.handler.sendPacket.bind(this.client.handler);
+      this.client.handler.sendPacket = (pType: number, data: Uint8Array, flags: number) => {
+        // PacketType.Command = 2
+        if (pType === 2) {
+          const str = Buffer.from(data).toString("utf-8");
+          if (str.startsWith("clientinit ")) {
+            const patched = patchClientInitVersion(str);
+            origSendPacket(pType, Buffer.from(patched), flags);
+            return;
+          }
+        }
+        origSendPacket(pType, data, flags);
+      };
+    }
 
     this.client.on("textMessage", (msg: TextMessage) => {
       const tsMsg: TS3TextMessage = {
