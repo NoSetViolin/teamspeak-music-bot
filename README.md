@@ -124,6 +124,70 @@ sudo ./scripts/install.sh
 
 自动安装 Node.js 和依赖，配置 systemd 服务，支持开机自启。
 
+## 更新升级
+
+### Windows 用户
+
+```
+1. 双击 scripts\stop.bat 停止运行中的机器人（或手动关闭窗口）
+2. 在项目目录打开命令行，执行 git pull
+3. 双击 scripts\setup.bat 重新安装依赖并构建
+4. 双击 scripts\start.bat 启动
+```
+
+### 手动安装用户（所有系统）
+
+```bash
+# 停止当前运行的机器人（Ctrl+C 或 kill 进程）
+
+# 拉取最新代码
+git pull
+
+# 重新安装依赖（如有新增依赖）
+npm install
+cd web && npm install && cd ..
+
+# 重新构建
+npm run build
+
+# 启动
+npm start
+```
+
+### Docker 用户
+
+```bash
+cd scripts/docker
+
+# 拉取最新代码
+git pull
+
+# 重新构建并启动（数据自动保留）
+docker-compose up -d --build
+```
+
+> 数据（数据库、Cookie、日志）保存在 Docker 命名卷 `tsmusicbot-data` 中，更新不会丢失。
+
+### Linux systemd 用户
+
+```bash
+# 停止服务
+sudo systemctl stop tsmusicbot
+
+# 拉取最新代码
+git pull
+
+# 重新安装依赖并构建
+npm install
+cd web && npm install && cd ..
+npm run build
+
+# 重新启动服务
+sudo systemctl start tsmusicbot
+```
+
+> **提示：** 更新不会影响你的 `config.json` 配置文件、数据库和登录 Cookie，所有数据会自动保留。
+
 ## 使用说明
 
 ### 首次配置
