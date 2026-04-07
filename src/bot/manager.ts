@@ -131,12 +131,25 @@ export class BotManager {
     const bot = this.bots.get(id);
     if (!bot) throw new Error(`Bot ${id} not found`);
     await bot.connect();
+
+    // Mark as autoStart so it reconnects on Docker restart, and persist identity
+    const saved = this.database.getBotInstances().find((i) => i.id === id);
+    if (saved) {
+      this.database.saveBotInstance({ ...saved, autoStart: true });
+      this.persistBotIdentity(saved, bot);
+    }
   }
 
   stopBot(id: string): void {
     const bot = this.bots.get(id);
     if (!bot) throw new Error(`Bot ${id} not found`);
     bot.disconnect();
+
+    // Mark as not autoStart so it stays stopped on Docker restart
+    const saved = this.database.getBotInstances().find((i) => i.id === id);
+    if (saved) {
+      this.database.saveBotInstance({ ...saved, autoStart: false });
+    }
   }
 
   async loadSavedBots(): Promise<void> {
@@ -150,6 +163,7 @@ export class BotManager {
           port: saved.serverPort,
           queryPort: 10011,
           nickname: saved.nickname,
+          identity: saved.identity || undefined,
           defaultChannel: saved.defaultChannel || undefined,
           channelPassword: saved.channelPassword || undefined,
         },
@@ -163,24 +177,43 @@ export class BotManager {
 
       this.bots.set(saved.id, bot);
 
-      // Auto-connect in background (non-blocking, won't affect other bots)
-      bot.connect().then(() => {
+      // Only auto-connect bots that have autoStart enabled
+      if (saved.autoStart) {
+        bot.connect().then(() => {
+          // Persist identity after successful connection for future restarts
+          this.persistBotIdentity(saved, bot);
+          this.logger.info(
+            { botId: saved.id, name: saved.name },
+            "Auto-connected saved bot"
+          );
+        }).catch((err) => {
+          this.logger.error(
+            { err, botId: saved.id, name: saved.name },
+            "Failed to auto-connect bot (start manually from Settings)"
+          );
+        });
+
+        // Stagger connections to avoid overwhelming the TS server
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      } else {
         this.logger.info(
           { botId: saved.id, name: saved.name },
-          "Auto-connected saved bot"
+          "Loaded bot (autoStart disabled, not connecting)"
         );
-      }).catch((err) => {
-        this.logger.error(
-          { err, botId: saved.id, name: saved.name },
-          "Failed to auto-connect bot (start manually from Settings)"
-        );
-      });
+      }
     }
 
     this.logger.info(
       { count: savedInstances.length },
       "Loaded saved bot instances"
     );
+  }
+
+  private persistBotIdentity(saved: import("../data/database.js").BotInstance, bot: BotInstance): void {
+    const identity = bot.getIdentityExport();
+    if (identity && identity !== saved.identity) {
+      this.database.saveBotInstance({ ...saved, identity });
+    }
   }
 
   shutdown(): void {

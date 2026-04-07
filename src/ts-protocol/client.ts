@@ -53,6 +53,18 @@ export class TS3Client extends EventEmitter {
   }
 
   async connect(): Promise<void> {
+    // Clean up any existing connection before creating a new one
+    if (this.client) {
+      this.logger.info("Cleaning up previous connection before reconnecting");
+      try {
+        await this.client.disconnect();
+      } catch {
+        // Ignore errors during cleanup
+      }
+      this.client = null;
+      this.clientId = 0;
+    }
+
     const addr = `${this.options.host}:${this.options.port}`;
     this.logger.info({ addr }, "Connecting to TeamSpeak server (full client protocol)");
 

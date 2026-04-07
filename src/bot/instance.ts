@@ -553,4 +553,8 @@ export class BotInstance extends EventEmitter {
   isConnected(): boolean {
     return this.connected;
   }
+
+  getIdentityExport(): string | undefined {
+    return this.tsClient.getIdentityExport();
+  }
 }

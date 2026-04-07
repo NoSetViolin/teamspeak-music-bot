@@ -24,6 +24,7 @@ export interface BotInstance {
   defaultChannel: string;
   channelPassword: string;
   autoStart: boolean;
+  identity?: string;
 }
 
 export interface BotDatabase {
@@ -34,6 +35,15 @@ export interface BotDatabase {
   getBotInstances(): BotInstance[];
   deleteBotInstance(id: string): boolean;
   close(): void;
+}
+
+function migrateSchema(db: Database.Database): void {
+  // Add identity column if it doesn't exist (migration for existing databases)
+  const columns = db.prepare("PRAGMA table_info(bot_instances)").all() as Array<{ name: string }>;
+  const hasIdentity = columns.some((c) => c.name === "identity");
+  if (!hasIdentity) {
+    db.exec("ALTER TABLE bot_instances ADD COLUMN identity TEXT");
+  }
 }
 
 function initTables(db: Database.Database): void {
@@ -58,7 +68,8 @@ function initTables(db: Database.Database): void {
       nickname TEXT NOT NULL,
       defaultChannel TEXT NOT NULL,
       channelPassword TEXT NOT NULL,
-      autoStart INTEGER NOT NULL DEFAULT 0
+      autoStart INTEGER NOT NULL DEFAULT 0,
+      identity TEXT
     );
   `);
 }
@@ -67,6 +78,7 @@ export function createDatabase(dbPath: string): BotDatabase {
   const db = new Database(dbPath);
   db.pragma("journal_mode = WAL");
   initTables(db);
+  migrateSchema(db);
 
   const insertHistory = db.prepare(`
     INSERT INTO play_history (botId, songId, songName, artist, album, platform, coverUrl)
@@ -78,8 +90,8 @@ export function createDatabase(dbPath: string): BotDatabase {
   `);
 
   const upsertInstance = db.prepare(`
-    INSERT INTO bot_instances (id, name, serverAddress, serverPort, nickname, defaultChannel, channelPassword, autoStart)
-    VALUES (@id, @name, @serverAddress, @serverPort, @nickname, @defaultChannel, @channelPassword, @autoStart)
+    INSERT INTO bot_instances (id, name, serverAddress, serverPort, nickname, defaultChannel, channelPassword, autoStart, identity)
+    VALUES (@id, @name, @serverAddress, @serverPort, @nickname, @defaultChannel, @channelPassword, @autoStart, @identity)
     ON CONFLICT(id) DO UPDATE SET
       name = excluded.name,
       serverAddress = excluded.serverAddress,
@@ -87,7 +99,8 @@ export function createDatabase(dbPath: string): BotDatabase {
       nickname = excluded.nickname,
       defaultChannel = excluded.defaultChannel,
       channelPassword = excluded.channelPassword,
-      autoStart = excluded.autoStart
+      autoStart = excluded.autoStart,
+      identity = excluded.identity
   `);
 
   const selectInstances = db.prepare(`SELECT * FROM bot_instances`);
@@ -109,14 +122,19 @@ export function createDatabase(dbPath: string): BotDatabase {
       upsertInstance.run({
         ...instance,
         autoStart: instance.autoStart ? 1 : 0,
+        identity: instance.identity ?? null,
       });
     },
 
     getBotInstances() {
       const rows = selectInstances.all() as Array<
-        Omit<BotInstance, "autoStart"> & { autoStart: number }
+        Omit<BotInstance, "autoStart" | "identity"> & { autoStart: number; identity: string | null }
       >;
-      return rows.map((r) => ({ ...r, autoStart: r.autoStart === 1 }));
+      return rows.map((r) => ({
+        ...r,
+        autoStart: r.autoStart === 1,
+        identity: r.identity ?? undefined,
+      }));
     },
 
     deleteBotInstance(id) {
