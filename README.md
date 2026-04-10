@@ -21,51 +21,6 @@
   <img src="https://img.shields.io/badge/TS6-支持-2580C3?logo=teamspeak&logoColor=white" />
 </p>
 
-> **`dev` 分支** — 活跃开发分支，包含最新特性和 bug 修复。
-> ！！！如非必要！！！请使用稳定版本，请切换到 [`main`](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/tree/main) 分支。
-
----
-
-## dev 分支最新变更
-
-### TS3/TS6 双协议支持
-
-本分支新增了 TeamSpeak 6 Server 的完整支持。TS6 Server（[teamspeak/teamspeak6-server](https://github.com/teamspeak/teamspeak6-server)）是 TeamSpeak 全新的自托管服务器，与 TS3 Server 存在协议层差异。
-
-**新增模块：**
-
-| 文件 | 说明 |
-|------|------|
-| `src/ts-protocol/protocol-detect.ts` | 服务器协议自动检测（并行探测 TS3 port 10011 + TS6 port 10080） |
-| `src/ts-protocol/http-query.ts` | TS6 HTTP Query 客户端（替代 TS3 已废弃的 raw TCP ServerQuery） |
-| `src/ts-protocol/ts6-compat.ts` | TS6 兼容中间件（升级 clientinit 版本号 + 签名） |
-
-**关键改动：**
-
-- **自动协议检测** — 连接时自动判断目标服务器是 TS3 还是 TS6，无需手动配置
-- **TS6 HTTP Query** — TS6 用 HTTP API（10080/10443）替代了 TS3 的 raw TCP ServerQuery（10011），已适配
-- **clientinit 版本升级** — 通过 CommandMiddleware 将客户端版本从 3.5.3 升级到 3.6.2（含匹配 ECDSA 签名），避免 TS6 服务器拒绝连接
-- **License block type 8** — `@honeybbq/teamspeak-client` 已内置 `Ts5Server` 类型支持，握手兼容 TS6
-- **数据库持久化** — `serverProtocol` 和 `ts6ApiKey` 配置持久化到 SQLite，重启不丢失
-
-**Bug 修复：**
-
-- 修复 `playNext()` 重试逻辑中成功重试后仍执行 `player.stop()` 的 bug
-- 修复协议探测中 `probeTS3Query` 双重 resolve 竞态条件
-- 修复 `disconnect()` 未清理 `httpQuery` / `udpErrorTimer` 的内存泄漏
-- 修复 `TS6HttpQuery.request()` 双重 reject 问题
-- 添加重复 `connect()` 调用的保护（先断开旧连接）
-
-### YouTube 音源（可选）
-
-新增基于 `yt-dlp` 的 YouTube 音源，**默认未启用**。安装 `yt-dlp` 后可通过 `!play -y <关键词>` 或 WebUI 平台选项使用。详见 [可选：YouTube 音源](#可选youtube-音源) 章节的安装步骤。
-
-- `src/music/youtube.ts` — YouTubeProvider（通过 `yt-dlp --dump-json` 搜索、`--get-url` 取直链）
-- 未安装 `yt-dlp` 时搜索静默返回空结果，不影响其他音源
-- 服务器密码登录（`serverPassword` 字段）、Bot 选择器 UI 改进等特性见 git log
-
----
-
 ## 功能特性
 
 - **多平台音源** — 网易云音乐 + QQ 音乐 + 哔哩哔哩（默认内置），YouTube 可选启用（通过 yt-dlp），统一搜索，结果标注来源
@@ -172,11 +127,11 @@ sudo ./scripts/install.sh
 
 ## 更新升级
 
-> **⚠️ 从 dev 分支 `d5d6abe` 或更早版本升级时的重要变更**
+> **⚠️ 从使用 `@honeybbq/teamspeak-client 0.1.x` 的旧版本升级时的重要变更**
 >
-> 本次升级将底层 TeamSpeak 协议库 `@honeybbq/teamspeak-client` 从 `0.1.0` 升级到 `0.2.1`，移除了本项目内置的 TS6 兼容层（`src/ts-protocol/ts6-compat.ts`），改用库自带的通用 `clientinit` 协议。这是一次**必要的 bug 修复**，但涉及一个数据库迁移：
+> 本项目已将底层 TeamSpeak 协议库升级到 `0.2.x` 并移除了内置的 TS6 兼容层，改用库自带的通用 `clientinit` 协议。这涉及一次**数据库迁移**：
 >
-> **旧的身份（identity）不兼容新的加密握手路径。** 0.1.0 版本的库在生成 TS 客户端身份时存在 P-256 公钥 DER 编码错误，该 bug 在 0.1.1 中由本项目维护者 [ZHANGTIANYAO1](https://github.com/HoneyBBQ/teamspeak-js/pull/5) 修复并合并到上游。0.1.0 生成的身份与 0.2.x 修复后的握手路径**不兼容**：升级后用旧身份连接会卡在 `received initivexpand2` 直到 15 秒超时。
+> **旧的身份（identity）不兼容新的加密握手路径。** `0.1.0` 版本的库在生成 TS 客户端身份时存在 P-256 公钥 DER 编码错误，该 bug 在 `0.1.1` 中由本项目维护者 [ZHANGTIANYAO1](https://github.com/HoneyBBQ/teamspeak-js/pull/5) 修复并合并到上游。`0.1.0` 生成的身份与 `0.2.x` 修复后的握手路径**不兼容**：升级后用旧身份连接会卡在 `received initivexpand2` 直到 15 秒超时。
 >
 > **解决办法**：升级后清空受影响机器人的 `identity` 字段，下次启动时程序会自动生成新身份并持久化。
 >
@@ -196,7 +151,7 @@ sudo ./scripts/install.sh
 > - ❌ TS6 服务器 + 旧身份：**必须**清空身份才能连接
 > - ⚠️ 清空身份后，TS 服务器会把机器人识别为**全新的客户端**。之前手动赋予机器人的**服务器组需要用新 UID 重新授予一次**，之后每次重启都会自动保留
 >
-> 完成这一步后，按下面对应的系统升级步骤即可。
+> **如何判断是否需要迁移**：如果你是全新安装，或者你的机器人数据库中 `identity` 字段已经是空的，则**无需任何操作**。完成上述步骤后，按下面对应的系统升级步骤执行即可。
 
 ### Windows 用户
 
@@ -468,7 +423,7 @@ pip install -U yt-dlp
 ## 常见问题
 
 **Q：支持 TeamSpeak 6 Server 吗？**
-A：支持。`dev` 分支已实现 TS3/TS6 双协议支持，连接时会自动检测服务器类型。如果自动检测失败（例如 Query 端口被防火墙屏蔽），可以在创建机器人时手动指定 `serverProtocol: "ts6"`。TS6 Server 的 HTTP Query API（端口 10080）也已适配，需要时可配置 `ts6ApiKey`。
+A：支持。本项目内置 TS3/TS6 双协议支持，连接时会自动检测服务器类型。如果自动检测失败（例如 Query 端口被防火墙屏蔽），可以在创建机器人时手动指定 `serverProtocol: "ts6"`。TS6 Server 的 HTTP Query API（端口 10080）也已适配，需要时可配置 `ts6ApiKey`。
 
 **Q：机器人连接了但 TeamSpeak 中听不到音乐？**
 A：确保机器人和你在同一个频道。检查音量（`!vol 75`）。部分 VIP 歌曲需要先登录账号。
@@ -511,6 +466,66 @@ A：`git pull` 拉取最新代码，然后 `npm install && npm run build && npm 
 3. 提交更改 (`git commit -m 'feat: 添加新功能'`)
 4. 推送分支 (`git push origin feature/新功能`)
 5. 提交 Pull Request
+
+## 更新日志
+
+> 完整历史请查看 [git log](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/commits/main) 或 [Releases](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/releases)。这里只列出重要变更和面向用户的破坏性改动。
+
+### 最新版本
+
+**协议层 & 稳定性**
+
+- **升级 `@honeybbq/teamspeak-client` 到 `0.2.1`**，移除内置 TS6 兼容层（`ts6-compat.ts`），改用库自带的通用 `clientinit` 协议（`3.?.? [Build: 5680278000]`），TS3/TS6 单一代码路径。
+  - ⚠️ **破坏性**：`0.1.0` 生成的旧身份与新握手路径不兼容，升级时需要迁移。详见 [更新升级](#更新升级) 章节顶部的警告。
+- **修复 `startBot` 与 `stopBot` 之间的竞态**：mid-handshake 被替换的 BotInstance 不再泄漏 TS 会话，`disconnect()` 被 `connect()` 的 await 插队时不再错误地把 `connected` 翻回 `true`。
+- **修复播放条自动刷新 bug**：BotManager 现在在创建新 BotInstance 时 emit `botInstance` 事件，WebSocket 监听器会立即重新挂接到新实例，播放状态变化无需手动刷新页面。
+- **`connect()` 增加 15 秒超时**：握手卡住时会清理掉挂起的实例并返回 500，不再无限阻塞 HTTP 请求和 UI。
+- **识别持久化修复**：`startBot` 现在会从数据库读取 `identity` 传给新 BotInstance，服务器组在机器人重启后能保留。
+
+**HTTP API 加固**
+
+- 新增输入校验，拒绝无效值并返回 **400**（之前会返回 200 包装 usage-text 字符串）：
+  - `/volume`：非数字、`NaN`/`Infinity`、超出 `[0,100]`
+  - `/mode`：不在 `{seq, loop, random, rloop}` 中的值
+  - `/seek`：`NaN`/`Infinity`、负数、字符串
+  - `/play-at`：索引越界（**先**校验再停止当前播放，避免误杀正在播的歌）
+- **修复 YouTube 平台路由**：`/play`、`/add`、`/playlist`、`/play-by-id`、`/add-by-id`、`/play-playlist` 现在都正确处理 `platform=youtube`（之前会静默回退到网易云）。
+- **修复 `/auth/status?platform=youtube` 数据泄漏**：之前会回退到网易云并返回网易云用户的昵称 + 头像 URL，现在正确路由到 YouTube provider 并报告 `yt-dlp` 的实际可用状态。
+- **`/auth/cookie` 拒绝 `platform=youtube`**，防止意外覆盖网易云 cookie。
+
+**连接状态一致性**
+
+- 断开连接时，音频命令（`play`/`add`/`next`/`prev`/`playlist`/`album`/`fm`）返回 **400 "Bot is not connected to TeamSpeak"**；配置类命令（`volume`/`mode`/`clear`/`stop`/`queue`/`now`/`lyrics`）仍可正常工作，保持 UI 可用。
+- `resolveAndPlay` 在网络请求（URL 解析）前后都会检查 `this.connected`，防止在解析期间被 `stop()` 中断后仍然启动 ffmpeg。
+- `tsClient` 的 `disconnected` 事件处理器现在总是清理播放器状态，不再因为 `connect()` 从未完成而遗留 `playing=true` 的僵尸状态。
+
+**功能改进**
+
+- **YouTube 音源（可选）**：新增基于 `yt-dlp` 的 YouTube provider，通过 `!play -y <关键词>` 或 WebUI 平台选项使用。未安装 `yt-dlp` 时静默降级、返回空结果，不影响其他音源。详见 [可选：YouTube 音源](#可选youtube-音源)。
+- **Bot Selector UI**：
+  - 始终可见（不再只有 ≥2 个机器人时才显示）
+  - 尺寸放大（更大的按钮、字体、状态图标）
+  - 每行增加 **电源按键**（一键启动/停止对应机器人，带禁用态与播放状态高亮）
+  - 每行增加 **链接按钮**（复制机器人专属 URL）
+  - 新路由 `/bot/:id`，打开后自动切换到对应机器人
+- **服务器密码登录**：`serverPassword` 字段已加入数据库与 Settings UI，支持加入需要密码的 TS 服务器。
+- **`!add` 一键开播**：在连接状态下向空队列 `!add` 歌曲时自动开始播放（之前只会入队，需要再 `!play` 或 `!next`）。
+- **WebSocket 新增 `botRemoved` 事件**：删除机器人后 UI 会立即从列表中移除（之前需要手动刷新页面）。
+
+**内部修复**
+
+- **`PlayQueue.remove()` 当前歌曲移除 bug**：移除正在播放的歌曲时，`next()` 不再跳过紧跟其后的那首歌。
+- **投票跳过**：需要的票数现在至少为 1（避免 `needed=0` 时单人"全票通过"的边界情况）；投票计数会在每首新歌开始时自动清零，不再跨歌曲泄漏。
+- 多处输入边界修复：`seek` 防止 `NaN` 毒化 `seekOffset` 导致 `getElapsed()` 永久返回 `NaN`；`play-at` 越界时不再误杀当前播放。
+
+### 历史重要变更
+
+更早的变更请查阅 git log。主要里程碑：
+
+- **初始 TS3/TS6 双协议支持**：自动协议检测（TS3 port 10011 vs TS6 port 10080）、TS6 HTTP Query 客户端、数据库持久化 `serverProtocol` / `ts6ApiKey`。
+- **多机器人架构**：支持同一进程中运行多个机器人实例，独立队列、进度、音量；WebUI 一键切换。
+- **网易云 / QQ 音乐 / 哔哩哔哩**：三平台原生音源，QR 码登录，Cookie 持久化。
+- **Docker & systemd 部署**：一键部署脚本，数据卷持久化，自动重启支持。
 
 ## 致谢
 
