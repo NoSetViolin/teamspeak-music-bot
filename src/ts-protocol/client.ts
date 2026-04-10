@@ -17,7 +17,6 @@ import {
   type ServerProtocol,
 } from "./protocol-detect.js";
 import { TS6HttpQuery } from "./http-query.js";
-import { patchClientInitVersion } from "./ts6-compat.js";
 
 export { CODEC_OPUS_MUSIC } from "./voice.js";
 export type { ServerProtocol } from "./protocol-detect.js";
@@ -206,37 +205,12 @@ export class TS3Client extends EventEmitter {
     });
 
     await this.client.connect();
-
-    // Patch handler.sendPacket to intercept clientinit during handshake for TS6.
-    //
-    // Why after connect(): The library's connect() internally calls #S() which
-    // replaces this.handler with a fresh PacketHandler. Any patch applied before
-    // connect() would be discarded. Patching here is safe because connect() only
-    // establishes the UDP socket and sends the first Init1 packet — the actual
-    // clientinit command is sent later in async message callbacks (after Init1
-    // round-trips complete), which cannot fire before this sync continuation.
-    //
-    // Why not commandMiddleware: The library's middleware chain only applies to
-    // post-connection commands (sendCommandNoWait/execCommand). The handshake's
-    // clientinit is sent directly via handler.sendPacket(), bypassing middleware.
-    if (this.detectedProtocol === "ts6") {
-      this.logger.info("Applying TS6 compatibility: upgrading client_version to 3.6.2");
-      const handler = this.client.handler;
-      const origSendPacket = handler.sendPacket.bind(handler);
-      handler.sendPacket = (pType: number, data: Uint8Array, flags: number) => {
-        // PacketType.Command = 2
-        if (pType === 2) {
-          const str = Buffer.from(data).toString("utf-8");
-          if (str.startsWith("clientinit ")) {
-            const patched = patchClientInitVersion(str);
-            origSendPacket(pType, Buffer.from(patched), flags);
-            return;
-          }
-        }
-        origSendPacket(pType, data, flags);
-      };
-    }
-
+    // Note: @honeybbq/teamspeak-client 0.2.x ships a universal clientinit
+    // (client_version "3.?.? [Build: 5680278000]" + matching signature)
+    // that works against both TS3 and TS6 servers. The old 3.6.2 monkey-
+    // patch on handler.sendPacket was removed when we bumped to 0.2.1 — it
+    // would have replaced the library's new correct version with a stale
+    // signature and made TS6 handshakes fail.
     await this.client.waitConnected();
     this.clientId = this.client.clientID();
     this.voiceFramesSent = 0;
