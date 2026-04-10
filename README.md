@@ -172,6 +172,32 @@ sudo ./scripts/install.sh
 
 ## 更新升级
 
+> **⚠️ 从 dev 分支 `d5d6abe` 或更早版本升级时的重要变更**
+>
+> 本次升级将底层 TeamSpeak 协议库 `@honeybbq/teamspeak-client` 从 `0.1.0` 升级到 `0.2.1`，移除了本项目内置的 TS6 兼容层（`src/ts-protocol/ts6-compat.ts`），改用库自带的通用 `clientinit` 协议。这是一次**必要的 bug 修复**，但涉及一个数据库迁移：
+>
+> **旧的身份（identity）不兼容新的加密握手路径。** 0.1.0 版本的库在生成 TS 客户端身份时存在 P-256 公钥 DER 编码错误，该 bug 在 0.1.1 中由本项目维护者 [ZHANGTIANYAO1](https://github.com/HoneyBBQ/teamspeak-js/pull/5) 修复并合并到上游。0.1.0 生成的身份与 0.2.x 修复后的握手路径**不兼容**：升级后用旧身份连接会卡在 `received initivexpand2` 直到 15 秒超时。
+>
+> **解决办法**：升级后清空受影响机器人的 `identity` 字段，下次启动时程序会自动生成新身份并持久化。
+>
+> ```bash
+> # 对每个需要迁移的机器人执行（替换 <bot-id> 为实际 UUID）：
+> python -c "import sqlite3; db=sqlite3.connect('data/tsmusicbot.db'); \
+>   db.execute(\"UPDATE bot_instances SET identity=NULL WHERE id='<bot-id>'\"); \
+>   db.commit()"
+>
+> # 或者清空所有机器人的身份：
+> python -c "import sqlite3; db=sqlite3.connect('data/tsmusicbot.db'); \
+>   db.execute('UPDATE bot_instances SET identity=NULL'); db.commit()"
+> ```
+>
+> **影响范围**：
+> - ✅ TS3 服务器 + 旧身份：在多数情况下仍可正常工作（TS3 对 legacy 编码更宽容），可选择不清空
+> - ❌ TS6 服务器 + 旧身份：**必须**清空身份才能连接
+> - ⚠️ 清空身份后，TS 服务器会把机器人识别为**全新的客户端**。之前手动赋予机器人的**服务器组需要用新 UID 重新授予一次**，之后每次重启都会自动保留
+>
+> 完成这一步后，按下面对应的系统升级步骤即可。
+
 ### Windows 用户
 
 ```
@@ -232,7 +258,7 @@ npm run build
 sudo systemctl start tsmusicbot
 ```
 
-> **提示：** 更新不会影响你的 `config.json` 配置文件、数据库和登录 Cookie，所有数据会自动保留。
+> **提示：** 更新不会影响你的 `config.json` 配置文件、数据库和登录 Cookie，所有数据会自动保留。但请注意本节开头关于 **身份迁移** 的警告——从 0.1.x 版本升级时需要手动清空旧身份。
 
 ## 使用说明
 
