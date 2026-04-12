@@ -41,7 +41,8 @@
 
 ## 截图
 
-> *截图即将添加*
+> <img width="2568" height="1408" alt="musicbot1" src="https://github.com/user-attachments/assets/47ba4f62-fae3-4c17-a7f7-b53f00885672" />
+> <img width="2568" height="1408" alt="musicbot2" src="https://github.com/user-attachments/assets/42f4bef7-d41b-49e3-8c13-b4ce6c822dba" />
 
 ## 快速开始
 
