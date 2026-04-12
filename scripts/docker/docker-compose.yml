@@ -1,8 +1,8 @@
 # TSMusicBot — Docker Compose
 # 一键部署：docker-compose up -d
 #
-# 所有依赖已内置（Node.js, FFmpeg, Opus 编码器）
-# 无需安装任何额外软件
+# 所有依赖已内置（Node.js, FFmpeg, Opus 编码器）无需安装任何额外软件
+# FFmpeg 使用系统包管理器安装，确保容器内兼容性
 
 services:
   tsmusicbot:

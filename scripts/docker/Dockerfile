@@ -25,30 +25,27 @@ RUN cd web && npm ci
 COPY . .
 RUN npm run build
 
+# Install production dependencies (with native addons compiled) in the builder
+# so we don't need build tools in the production image.
+RUN rm -rf node_modules && npm ci --production && npm cache clean --force
+
 # --- Stage 2: Production image ---
 FROM node:20-slim
 
-# Install only runtime native build tools (needed for native module rebuild)
+# Install system FFmpeg — the ffmpeg-static npm package bundles a pre-compiled
+# binary that can SIGSEGV inside Docker (incompatible glibc / missing libs).
+# System-installed FFmpeg is always compatible with the container runtime.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 make g++ && \
+    ffmpeg && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy built output
+# Copy built output and pre-compiled production node_modules from builder
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/web/dist ./web/dist
 COPY --from=builder /app/package*.json ./
-
-# Install production dependencies (includes ffmpeg-static, opus, sqlite3)
-# These need to compile native addons inside the container
-RUN npm ci --production && npm cache clean --force
-
-# Remove build tools to reduce image size
-RUN apt-get purge -y python3 make g++ && apt-get autoremove -y && \
-    rm -rf /var/lib/apt/lists/*
-
-# FFmpeg is bundled via ffmpeg-static — no system ffmpeg needed
+COPY --from=builder /app/node_modules ./node_modules
 
 # Data directory for database, cookies, logs
 RUN mkdir -p /app/data
