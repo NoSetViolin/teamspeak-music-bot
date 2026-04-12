@@ -35,28 +35,39 @@ function ffmpegWorks(bin: string): boolean {
   }
 }
 
-/** Resolved once at module load — prefer bundled ffmpeg-static, fall back to system. */
+/**
+ * Resolved once at module load.
+ *
+ * Priority: system FFmpeg → bundled ffmpeg-static.
+ *
+ * System-installed FFmpeg is always compatible with the running OS/container,
+ * while the pre-compiled binary from ffmpeg-static can SIGSEGV in Docker
+ * (passes `ffmpeg -version` but crashes during actual audio processing due to
+ * incompatible glibc or missing shared libraries).
+ */
 const resolvedFfmpeg: string = (() => {
+  // 1. Prefer system-installed FFmpeg (always compatible with the runtime)
+  if (ffmpegWorks("ffmpeg")) {
+    return "ffmpeg";
+  }
+
+  // 2. Fall back to bundled ffmpeg-static binary
   // On Windows, ffmpeg-static may return a path with backslashes; on Linux/macOS
   // it may return a Windows .exe path if node_modules was copied cross-platform.
   const isWinPath = ffmpegPath ? /\\/.test(ffmpegPath) || ffmpegPath.endsWith(".exe") : false;
   const onWindows = process.platform === "win32";
 
-  // Only try bundled binary if platform matches
   if (ffmpegPath && (onWindows === isWinPath)) {
     if (isExecutable(ffmpegPath) && ffmpegWorks(ffmpegPath)) {
       return ffmpegPath;
     }
   }
-  // Fall back to system ffmpeg
-  if (ffmpegWorks("ffmpeg")) {
-    return "ffmpeg";
-  }
+
   // Last resort: always use "ffmpeg" so spawn error is clear, never use a cross-platform path
   return "ffmpeg";
 })();
 
-/** Resolve ffmpeg binary: prefer bundled ffmpeg-static, fall back to system PATH. */
+/** Resolve ffmpeg binary: prefer system PATH, fall back to bundled ffmpeg-static. */
 function getFfmpegCommand(): string {
   return resolvedFfmpeg;
 }
