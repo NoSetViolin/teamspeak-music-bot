@@ -38,7 +38,17 @@ export function createWebServer(options: WebServerOptions): WebServer {
   const server = http.createServer(app);
   const logger = options.logger.child({ component: "web" });
 
+  if (options.config.trustProxy) {
+    // Honor X-Forwarded-* from a reverse proxy (nginx/Caddy/Cloudflare).
+    app.set("trust proxy", true);
+  }
+
   app.use(express.json());
+
+  app.get("/api/config/public-url", (_req, res) => {
+    const raw = (options.config.publicUrl ?? "").trim();
+    res.json({ publicUrl: raw ? raw.replace(/\/+$/, "") : null });
+  });
 
   app.use(
     "/api/bot",
