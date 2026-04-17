@@ -15,6 +15,38 @@ export interface HttpQueryResult {
 }
 
 /**
+ * Thrown when the TS6 HTTP Query returns a non-2xx status.
+ *
+ * The previous implementation silently ignored the status code, so a 400
+ * (bad parameter) or 403 (insufficient permission) looked identical to
+ * success in logs. Callers that rely on the response being applied —
+ * nickname / description / away-status updates — should catch this and
+ * surface it rather than log "updated" for a request that was rejected.
+ */
+export class HttpQueryError extends Error {
+  readonly status: number;
+  readonly body: unknown;
+  readonly path: string;
+
+  constructor(path: string, status: number, body: unknown) {
+    const bodySnippet = (() => {
+      if (body == null) return "";
+      const s = typeof body === "string" ? body : JSON.stringify(body);
+      return s.length > 200 ? s.slice(0, 200) + "\u2026" : s;
+    })();
+    super(
+      `TS6 HTTP Query ${path} failed: status=${status}${
+        bodySnippet ? ` body=${bodySnippet}` : ""
+      }`,
+    );
+    this.name = "HttpQueryError";
+    this.status = status;
+    this.body = body;
+    this.path = path;
+  }
+}
+
+/**
  * TS6 HTTP Query client.
  *
  * TeamSpeak 6 Server replaces the TS3 raw-TCP ServerQuery (port 10011)
@@ -157,12 +189,24 @@ export class TS6HttpQuery {
     });
   }
 
-  /** Update client properties (e.g., description) */
+  /**
+   * Update client properties (e.g., description, nickname, away).
+   *
+   * Throws HttpQueryError on non-2xx responses. The TS6 server returns
+   * 400 for invalid parameters and 403 for insufficient permissions;
+   * prior to this check the errors were silently dropped and callers
+   * logged a false "updated" success.
+   */
   async clientUpdate(
     properties: Record<string, string | number>,
     sid = 1,
   ): Promise<HttpQueryResult> {
-    return this.request("POST", `/1/clientupdate?sid=${sid}`, properties);
+    const path = `/1/clientupdate?sid=${sid}`;
+    const result = await this.request("POST", path, properties);
+    if (result.status < 200 || result.status >= 300) {
+      throw new HttpQueryError(path, result.status, result.body);
+    }
+    return result;
   }
 
   /** Move a client to a channel */

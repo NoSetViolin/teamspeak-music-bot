@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { Readable } from "node:stream";
 import axios from "axios";
 import { TS3Client, escapeTS3 } from "../ts-protocol/client.js";
+import { HttpQueryError } from "../ts-protocol/http-query.js";
 import type { ProfileConfig } from "../data/database.js";
 import type { QueuedSong } from "../audio/queue.js";
 import type { Logger } from "../logger.js";
@@ -135,20 +136,37 @@ export class BotProfileManager {
 
       // Wrap the file-transfer sequence with a timeout — the TS3
       // full-client file transfer can silently hang.
+      const start = Date.now();
       await this.withTimeout(this.doAvatarUpload(imageBuffer), FILE_TRANSFER_TIMEOUT_MS);
-      this.logger.info("Avatar updated");
+      this.logger.info(
+        { bytes: imageBuffer.length, elapsedMs: Date.now() - start },
+        "Avatar updated",
+      );
     } catch (err) {
       this.handleFeatureError("avatar", err);
     }
   }
 
+  /**
+   * Three-step upload. Each step is logged so the log can tell us whether
+   * a broken/loading avatar on the client is from:
+   *   (a) init failing (no permission)
+   *   (b) file transfer hanging on TCP 30033
+   *   (c) client_flag_avatar not applying
+   * If (b) happens, the avatar MD5 would still be set in the past — leaving
+   * clients showing a placeholder. The flag is now only set after the TCP
+   * transfer resolves.
+   */
   private async doAvatarUpload(imageBuffer: Buffer): Promise<void> {
     const host = this.tsClient.getHost();
+    this.logger.debug({ bytes: imageBuffer.length, host }, "Avatar: init file transfer");
     const info = await this.tsClient.fileTransferInitUpload(
       0n, "/avatar", "", BigInt(imageBuffer.length), true,
     );
+    this.logger.debug({ bytes: imageBuffer.length }, "Avatar: uploading file data");
     await this.tsClient.uploadFileData(host, info, Readable.from(imageBuffer));
     const md5 = createHash("md5").update(imageBuffer).digest("hex");
+    this.logger.debug({ md5 }, "Avatar: setting client_flag_avatar");
     await this.tsClient.sendCommandNoWait(`clientupdate client_flag_avatar=${escapeTS3(md5)}`);
   }
 
@@ -178,7 +196,11 @@ export class BotProfileManager {
         : "";
       const httpQuery = this.tsClient.getHttpQuery();
       if (httpQuery) {
-        await httpQuery.clientUpdate({ client_description: text });
+        // TS6 HTTP API: send the raw (unescaped) text. clientUpdate
+        // throws HttpQueryError on non-2xx so a silent 400/403 cannot
+        // be misreported as success.
+        const result = await httpQuery.clientUpdate({ client_description: text });
+        this.logger.info({ status: result.status }, "Description updated");
       } else {
         // clientupdate rejects client_description (error 1538).
         // Use clientedit on our own clid instead — this is what
@@ -193,8 +215,8 @@ export class BotProfileManager {
           ),
           5000,
         );
+        this.logger.info("Description updated");
       }
-      this.logger.info("Description updated");
     } catch (err) {
       this.handleFeatureError("description", err);
     }
@@ -204,18 +226,25 @@ export class BotProfileManager {
    * Build and send a single `clientupdate` command that sets nickname
    * and away status together, avoiding multiple round-trips that can
    * cause command-queue timeouts on the TS3 protocol.
+   *
+   * Values are collected as raw strings/numbers. The TS6 HTTP path
+   * forwards them as JSON (the server expects real spaces, not `\s`);
+   * the TS3 wire path escapes them on the fly. Previously the code
+   * escaped upfront and then split the escaped string to build the
+   * JSON body, so TS6 received literal backslashes and silently
+   * rejected the update.
    */
   private async updateClientProperties(song: QueuedSong | null): Promise<void> {
-    const parts: string[] = [];
+    const rawProps: Record<string, string | number> = {};
 
     // --- Nickname ---
     if (this.config.nicknameEnabled && !this.permDenied.nickname) {
       if (!song) {
-        parts.push(`client_nickname=${escapeTS3(this.defaultNickname)}`);
+        rawProps.client_nickname = this.defaultNickname;
       } else {
         const nickname = this.buildNickname(song);
         if (nickname) {
-          parts.push(`client_nickname=${escapeTS3(nickname)}`);
+          rawProps.client_nickname = nickname;
         }
       }
     }
@@ -223,31 +252,38 @@ export class BotProfileManager {
     // --- Away status ---
     if (this.config.awayStatusEnabled && !this.permDenied.awayStatus) {
       if (song) {
-        parts.push("client_away=0");
+        rawProps.client_away = 0;
       } else {
-        parts.push(`client_away=1 client_away_message=${escapeTS3("\u7B49\u5F85\u64AD\u653E")}`);
+        rawProps.client_away = 1;
+        rawProps.client_away_message = "\u7B49\u5F85\u64AD\u653E";
       }
     }
 
-    if (parts.length === 0) return;
+    if (Object.keys(rawProps).length === 0) return;
 
     try {
       const httpQuery = this.tsClient.getHttpQuery();
       if (httpQuery) {
-        // TS6: build a properties object
-        const props: Record<string, string | number> = {};
-        for (const part of parts) {
-          const eq = part.indexOf("=");
-          if (eq > 0) props[part.slice(0, eq)] = part.slice(eq + 1);
-        }
-        await httpQuery.clientUpdate(props);
+        // TS6: send raw values as JSON. Throws HttpQueryError on 4xx/5xx.
+        const result = await httpQuery.clientUpdate(rawProps);
+        this.logger.info(
+          { status: result.status, props: Object.keys(rawProps) },
+          "Client properties updated (nickname + away)",
+        );
       } else {
-        // Use sendCommandNoWait: the TS3 full-client protocol often
+        // TS3 wire protocol: escape string values inline.
+        // sendCommandNoWait: the TS3 full-client protocol often
         // doesn't return a timely error response for clientupdate,
         // causing execCommand to time out after 10s.
+        const parts = Object.entries(rawProps).map(([k, v]) =>
+          typeof v === "string" ? `${k}=${escapeTS3(v)}` : `${k}=${v}`,
+        );
         await this.tsClient.sendCommandNoWait(`clientupdate ${parts.join(" ")}`);
+        this.logger.info(
+          { props: Object.keys(rawProps) },
+          "Client properties updated (nickname + away)",
+        );
       }
-      this.logger.info("Client properties updated (nickname + away)");
     } catch (err) {
       // Flag both features on permission error
       this.handleFeatureError("nickname", err);
@@ -387,21 +423,28 @@ export class BotProfileManager {
     err: unknown,
   ): void {
     const msg = err instanceof Error ? err.message.toLowerCase() : String(err).toLowerCase();
+    const status = err instanceof HttpQueryError ? err.status : undefined;
+    const body = err instanceof HttpQueryError ? err.body : undefined;
     // Disable the feature for this session on unrecoverable errors:
     // - permission / insufficient → server denies the action
     // - invalid parameter → command not supported by this protocol
-    if (
+    // - HTTP 401/403 → TS6 server rejects the API key/role
+    // - HTTP 400 → bad parameter; retrying on every song change is wasteful
+    const isUnrecoverable =
       msg.includes("permission") ||
       msg.includes("insufficient") ||
-      msg.includes("invalid parameter")
-    ) {
+      msg.includes("invalid parameter") ||
+      status === 400 ||
+      status === 401 ||
+      status === 403;
+    if (isUnrecoverable) {
       this.permDenied[feature] = true;
       this.logger.info(
-        { feature, reason: msg },
+        { feature, status, body, reason: msg },
         "Feature disabled for this session (will retry after reconnect)",
       );
     } else {
-      this.logger.warn({ feature, err }, "Profile update failed");
+      this.logger.warn({ feature, status, body, err }, "Profile update failed");
     }
   }
 }
