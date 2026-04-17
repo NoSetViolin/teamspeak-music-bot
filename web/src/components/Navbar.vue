@@ -59,10 +59,30 @@
       </RouterLink>
     </div>
   </nav>
+
+  <div v-if="linkDialog.open" class="link-dialog-backdrop" @click="closeLinkDialog">
+    <div class="link-dialog" @click.stop>
+      <div class="link-dialog-title">{{ linkDialog.name }} 的专属链接</div>
+      <div class="link-dialog-hint">选中文本并按 Ctrl/Cmd+C 复制，或点击下方按钮</div>
+      <input
+        ref="linkInputRef"
+        class="link-dialog-input"
+        :value="linkDialog.url"
+        readonly
+        @focus="($event.target as HTMLInputElement).select()"
+      />
+      <div class="link-dialog-actions">
+        <button class="link-dialog-btn primary" @click="copyLinkFromDialog">
+          {{ linkDialog.copied ? '已复制' : '复制链接' }}
+        </button>
+        <button class="link-dialog-btn" @click="closeLinkDialog">关闭</button>
+      </div>
+    </div>
+  </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, onUnmounted } from 'vue';
+import { computed, ref, onMounted, onUnmounted, nextTick, reactive } from 'vue';
 import { Icon } from '@iconify/vue';
 import { usePlayerStore } from '../stores/player.js';
 
@@ -71,38 +91,91 @@ const activeBot = computed(() => store.activeBot);
 const dropdownOpen = ref(false);
 const selectorRef = ref<HTMLElement | null>(null);
 const togglingBots = ref<Record<string, boolean>>({});
+const linkInputRef = ref<HTMLInputElement | null>(null);
+const publicBaseUrl = ref<string | null>(null);
+
+const linkDialog = reactive({
+  open: false,
+  url: '',
+  name: '',
+  copied: false,
+});
 
 function selectBot(id: string) {
   store.setActiveBotId(id);
   dropdownOpen.value = false;
 }
 
-async function copyBotLink(id: string) {
-  const url = `${window.location.origin}/bot/${id}`;
-  // navigator.clipboard requires a secure context (HTTPS or localhost).
-  // Fall back to a hidden textarea + execCommand('copy') for plain HTTP
-  // access (e.g. when the bot is hosted on a remote IP).
+function resolveBaseUrl(): string {
+  const base = publicBaseUrl.value;
+  if (base && /^https?:\/\//i.test(base)) return base.replace(/\/+$/, '');
+  return window.location.origin;
+}
+
+async function tryClipboardWrite(text: string): Promise<boolean> {
   try {
     if (navigator.clipboard && window.isSecureContext) {
-      await navigator.clipboard.writeText(url);
-    } else {
-      const ta = document.createElement('textarea');
-      ta.value = url;
-      ta.style.position = 'fixed';
-      ta.style.opacity = '0';
-      ta.style.pointerEvents = 'none';
-      document.body.appendChild(ta);
-      ta.focus();
-      ta.select();
-      const ok = document.execCommand('copy');
-      document.body.removeChild(ta);
-      if (!ok) throw new Error('execCommand copy returned false');
+      await navigator.clipboard.writeText(text);
+      return true;
     }
-    dropdownOpen.value = false;
-  } catch (err) {
-    // Last-resort: prompt the user with the URL so they can copy manually
-    console.error('Failed to copy bot link', err);
-    window.prompt('复制以下链接：', url);
+  } catch {
+    // fall through
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    ta.style.pointerEvents = 'none';
+    document.body.appendChild(ta);
+    ta.focus();
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+async function copyBotLink(id: string) {
+  const bot = store.bots.find((b) => b.id === id);
+  const url = `${resolveBaseUrl()}/bot/${id}`;
+  linkDialog.url = url;
+  linkDialog.name = bot?.name ?? '机器人';
+  linkDialog.copied = false;
+  linkDialog.open = true;
+  dropdownOpen.value = false;
+  // Try to copy silently; user can still manually select if it fails.
+  const ok = await tryClipboardWrite(url);
+  if (ok) linkDialog.copied = true;
+  await nextTick();
+  linkInputRef.value?.focus();
+  linkInputRef.value?.select();
+}
+
+async function copyLinkFromDialog() {
+  const ok = await tryClipboardWrite(linkDialog.url);
+  if (ok) {
+    linkDialog.copied = true;
+  } else {
+    linkInputRef.value?.focus();
+    linkInputRef.value?.select();
+  }
+}
+
+function closeLinkDialog() {
+  linkDialog.open = false;
+}
+
+async function loadPublicBaseUrl() {
+  try {
+    const res = await fetch('/api/config/public-url');
+    if (!res.ok) return;
+    const data = (await res.json()) as { publicUrl?: string | null };
+    if (data.publicUrl) publicBaseUrl.value = data.publicUrl;
+  } catch {
+    // ignore — fall back to window.location.origin
   }
 }
 
@@ -130,6 +203,7 @@ function onClickOutside(e: MouseEvent) {
 
 onMounted(() => {
   document.addEventListener('click', onClickOutside);
+  loadPublicBaseUrl();
 });
 
 onUnmounted(() => {
@@ -397,5 +471,88 @@ onUnmounted(() => {
   opacity: 0.6;
   transition: opacity var(--transition-fast);
   &:hover { opacity: 1; }
+}
+
+.link-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.link-dialog {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 20px;
+  min-width: 360px;
+  max-width: 90vw;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
+}
+
+.link-dialog-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.link-dialog-hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-bottom: 12px;
+}
+
+.link-dialog-input {
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 13px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  background: var(--hover-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: inherit;
+  user-select: all;
+  -webkit-user-select: all;
+
+  &:focus {
+    outline: none;
+    border-color: var(--color-primary);
+  }
+}
+
+.link-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.link-dialog-btn {
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: var(--hover-bg);
+  color: inherit;
+  cursor: pointer;
+  transition: background var(--transition-fast), border-color var(--transition-fast);
+
+  &:hover {
+    background: var(--bg-card);
+  }
+
+  &.primary {
+    background: var(--color-primary);
+    border-color: var(--color-primary);
+    color: #fff;
+
+    &:hover {
+      filter: brightness(1.08);
+    }
+  }
 }
 </style>

@@ -13,7 +13,15 @@ export interface BotConfig {
   adminGroups: number[];
   autoReturnDelay: number;
   autoPauseOnEmpty: boolean;
-  idleTimeoutMinutes: number;  
+  idleTimeoutMinutes: number;
+  // Public base URL used when generating share links (e.g. the bot专属链接).
+  // Leave empty to use the browser's current origin. Example:
+  //   "https://music.example.com" or "http://1.2.3.4:3000"
+  publicUrl: string;
+  // When true, Express trusts X-Forwarded-* headers from a reverse proxy
+  // (nginx/Caddy/Cloudflare). Required for correct protocol/host detection
+  // behind HTTPS-terminating proxies.
+  trustProxy: boolean;
 }
 
 export function getDefaultConfig(): BotConfig {
@@ -30,6 +38,8 @@ export function getDefaultConfig(): BotConfig {
     autoReturnDelay: 300,
     autoPauseOnEmpty: true,
     idleTimeoutMinutes: 0,
+    publicUrl: "",
+    trustProxy: false,
   };
 }
 

@@ -79,7 +79,10 @@ async function main() {
   await webServer.start();
 
   logger.info({ webPort: config.webPort }, "TSMusicBot started");
-  logger.info(`WebUI: http://localhost:${config.webPort}`);
+  const publicUrl = (config.publicUrl ?? "").trim().replace(/\/+$/, "");
+  logger.info(
+    `WebUI: ${publicUrl || `http://localhost:${config.webPort}`}`
+  );
 
   const shutdown = () => {
     logger.info("Shutting down...");
