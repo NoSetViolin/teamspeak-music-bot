@@ -94,6 +94,13 @@ export const usePlayerStore = defineStore('player', {
       if (this.isPaused) return Math.min(timing.serverElapsed, maxDuration);
       return Math.min(timing.serverElapsed + (Date.now() - timing.serverSyncTime) / 1000, maxDuration);
     },
+    /** Sources that are currently logged in. Order: netease before qq. */
+    availableSources(): Source[] {
+      const s: Source[] = [];
+      if (this.authStatus.netease) s.push('netease');
+      if (this.authStatus.qq) s.push('qq');
+      return s;
+    },
   },
 
   actions: {
@@ -401,24 +408,20 @@ export const usePlayerStore = defineStore('player', {
 
       const [neRecPL, neDaily, neUserPL, qqRecPL, qqDaily, qqUserPL, bili] = results;
 
-      if (neRecPL.status === 'fulfilled') {
-        this.recommendPlaylists.netease = neRecPL.value.data.playlists ?? [];
-      }
-      if (neDaily.status === 'fulfilled') {
-        this.dailySongs.netease = neDaily.value.data.songs ?? [];
-      }
-      if (neUserPL.status === 'fulfilled') {
-        this.userPlaylists.netease = neUserPL.value.data.playlists ?? [];
-      }
-      if (qqRecPL.status === 'fulfilled') {
-        this.recommendPlaylists.qq = qqRecPL.value.data.playlists ?? [];
-      }
-      if (qqDaily.status === 'fulfilled') {
-        this.dailySongs.qq = qqDaily.value.data.songs ?? [];
-      }
-      if (qqUserPL.status === 'fulfilled') {
-        this.userPlaylists.qq = qqUserPL.value.data.playlists ?? [];
-      }
+      this.recommendPlaylists.netease =
+        neRecPL.status === 'fulfilled' ? (neRecPL.value.data.playlists ?? []) : [];
+      this.dailySongs.netease =
+        neDaily.status === 'fulfilled' ? (neDaily.value.data.songs ?? []) : [];
+      this.userPlaylists.netease =
+        neUserPL.status === 'fulfilled' ? (neUserPL.value.data.playlists ?? []) : [];
+      this.recommendPlaylists.qq =
+        qqRecPL.status === 'fulfilled' ? (qqRecPL.value.data.playlists ?? []) : [];
+      this.dailySongs.qq =
+        qqDaily.status === 'fulfilled' ? (qqDaily.value.data.songs ?? []) : [];
+      this.userPlaylists.qq =
+        qqUserPL.status === 'fulfilled' ? (qqUserPL.value.data.playlists ?? []) : [];
+      // bilibili popular: keep previous value on failure (it's an anonymous endpoint
+      // unrelated to user auth state, and stale popular results are harmless)
       if (bili.status === 'fulfilled') {
         this.bilibiliPopular = bili.value.data.songs ?? [];
       }

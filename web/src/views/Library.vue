@@ -63,12 +63,7 @@ const store = usePlayerStore();
 const history = ref<Song[]>([]);
 const historyLoading = ref(true);
 
-const userAvailable = computed<Source[]>(() => {
-  const s: Source[] = [];
-  if (store.authStatus.netease) s.push('netease');
-  if (store.authStatus.qq) s.push('qq');
-  return s;
-});
+const userAvailable = computed<Source[]>(() => store.availableSources);
 
 const userSource = ref<Source>(loadTabSource('library.user'));
 watch(userSource, (v) => saveTabSource('library.user', v));

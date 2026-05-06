@@ -137,23 +137,15 @@ const USER_PLAYLIST_LIMIT = 20;
 const userPlaylistsExpanded = ref(false);
 
 // Available sources per section.
+// Recommend playlists work anonymously on netease, so it's always available;
+// QQ requires login. This intentionally differs from dailyAvailable/userAvailable.
 const recommendAvailable = computed<Source[]>(() => {
   const s: Source[] = ['netease'];
   if (store.authStatus.qq) s.push('qq');
   return s;
 });
-const dailyAvailable = computed<Source[]>(() => {
-  const s: Source[] = [];
-  if (store.authStatus.netease) s.push('netease');
-  if (store.authStatus.qq) s.push('qq');
-  return s;
-});
-const userAvailable = computed<Source[]>(() => {
-  const s: Source[] = [];
-  if (store.authStatus.netease) s.push('netease');
-  if (store.authStatus.qq) s.push('qq');
-  return s;
-});
+const dailyAvailable = computed<Source[]>(() => store.availableSources);
+const userAvailable = computed<Source[]>(() => store.availableSources);
 
 // Persisted active source per section.
 const recommendSource = ref<Source>(loadTabSource('home.recommend'));

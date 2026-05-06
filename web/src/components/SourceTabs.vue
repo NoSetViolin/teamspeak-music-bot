@@ -14,7 +14,7 @@
 </template>
 
 <script setup lang="ts">
-type Source = 'netease' | 'qq';
+import type { Source } from '../stores/player.js';
 
 const LABELS: Record<Source, string> = {
   netease: '网易云',
