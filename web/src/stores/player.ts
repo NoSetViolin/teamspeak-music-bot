@@ -426,7 +426,15 @@ export const usePlayerStore = defineStore('player', {
         this.bilibiliPopular = bili.value.data.songs ?? [];
       }
 
-      this.lastFetchTime = Date.now();
+      // Only mark as fetched if at least the auth-status calls succeeded —
+      // a fully failed fetch (network blip / server down) should NOT be
+      // cached for 5 minutes, otherwise the user has to hard-reload to
+      // recover when connectivity returns.
+      const authOk =
+        neAuthRes.status === 'fulfilled' || qqAuthRes.status === 'fulfilled';
+      if (authOk) {
+        this.lastFetchTime = Date.now();
+      }
     },
   },
 });

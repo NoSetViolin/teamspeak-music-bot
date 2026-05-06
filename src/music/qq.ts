@@ -124,24 +124,35 @@ export class QQMusicProvider implements MusicProvider {
    * The wrapper's /getMusicPlay accepts a comma-separated songmid list
    * and resolves all of them in a single upstream call (~2-3s for 100+
    * songs), so this is much cheaper than per-song probing.
+   *
+   * Returns:
+   *   - non-null Set: authoritative result. Empty Set means all songs are
+   *     unplayable; non-empty means filter to those mids.
+   *   - null: the batch endpoint failed (timeout/exception). Caller
+   *     should fall back to sequential retry rather than treating as
+   *     "all unplayable", since we don't actually know.
+   *
+   * TODO: songIds with 1000+ entries may exceed URL length; chunk if
+   * we ever support that scale.
    */
-  async getPlayableSongIds(songIds: string[]): Promise<Set<string>> {
+  async getPlayableSongIds(songIds: string[]): Promise<Set<string> | null> {
     if (songIds.length === 0) return new Set();
     try {
       const res = await this.api.get("/getMusicPlay", {
         params: { songmid: songIds.join(","), quality: this.quality, ...this.cookieParams },
       });
-      const playUrlMap: Record<string, { url?: string }> =
-        res.data?.data?.playUrl ?? {};
+      const playUrlMap: Record<string, { url?: string }> | undefined =
+        res.data?.data?.playUrl;
+      // Distinguish "endpoint returned no playUrl object at all" (treat
+      // as failure → null) from "returned an empty/all-unplayable map".
+      if (!playUrlMap) return null;
       const playable = new Set<string>();
       for (const [mid, info] of Object.entries(playUrlMap)) {
         if (info?.url) playable.add(mid);
       }
       return playable;
     } catch {
-      // On any error, fall through to per-song retry path — return empty
-      // and let the caller try songs sequentially via getSongUrl.
-      return new Set();
+      return null;
     }
   }
 

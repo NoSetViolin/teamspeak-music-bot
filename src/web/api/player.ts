@@ -255,15 +255,17 @@ export function createPlayerRouter(
       // ones, otherwise the playback retry loop wastes time guessing.
       let queueable: { id: string }[] = songs;
       const totalCount = songs.length;
-      const qqLike = provider as { getPlayableSongIds?: (ids: string[]) => Promise<Set<string>> };
+      const qqLike = provider as { getPlayableSongIds?: (ids: string[]) => Promise<Set<string> | null> };
       if (typeof qqLike.getPlayableSongIds === "function") {
         const playable = await qqLike.getPlayableSongIds(songs.map((s: { id: string }) => s.id));
-        if (playable.size > 0) {
+        if (playable !== null) {
+          // Authoritative answer from upstream — even an empty set means
+          // "we know none are playable", short-circuit immediately rather
+          // than wasting 20+ retries.
           queueable = songs.filter((s: { id: string }) => playable.has(s.id));
         }
-        // If batch returned nothing, leave queueable as-is and let the
-        // sequential retry path try anyway (handles the case where the
-        // batch endpoint failed entirely).
+        // If null, the batch endpoint itself errored — fall through to
+        // the sequential retry path, which still has a chance.
       }
       if (queueable.length === 0) {
         res.json({ message: `Loaded ${totalCount} songs but none were playable (likely copyright/region restrictions).` });

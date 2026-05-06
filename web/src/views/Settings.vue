@@ -414,7 +414,11 @@
             <span class="profile-bot-name">{{ bot.name }}</span>
           </button>
           <div v-if="profileExpanded[bot.id]" class="profile-toggles">
-            <div v-if="!profileConfigs[bot.id]" class="profile-loading">加载中...</div>
+            <div v-if="profileLoadError[bot.id]" class="profile-loading profile-error">
+              {{ profileLoadError[bot.id] }}
+              <button class="btn-link" @click="loadProfileConfig(bot.id)">重试</button>
+            </div>
+            <div v-else-if="!profileConfigs[bot.id]" class="profile-loading">加载中...</div>
             <label
               v-else
               v-for="t in PROFILE_TOGGLES"
@@ -771,14 +775,18 @@ const PROFILE_TOGGLES: ReadonlyArray<{
 
 const profileConfigs = reactive<Record<string, ProfileConfig>>({});
 const profileExpanded = reactive<Record<string, boolean>>({});
+const profileLoadError = reactive<Record<string, string | null>>({});
 
 async function loadProfileConfig(botId: string) {
   if (profileConfigs[botId]) return;
+  profileLoadError[botId] = null;
   try {
     const res = await axios.get(`/api/player/${botId}/profile`);
     profileConfigs[botId] = res.data;
-  } catch {
-    // bot not loaded or no profile manager yet
+  } catch (err: any) {
+    profileLoadError[botId] = err?.response?.status === 404
+      ? '机器人未加载'
+      : '加载失败，请重试';
   }
 }
 
@@ -1297,6 +1305,19 @@ onUnmounted(() => {
   font-size: 13px;
   color: var(--text-tertiary);
   text-align: center;
+}
+
+.profile-error {
+  color: var(--brand-netease); // re-uses red brand color for error state
+
+  .btn-link {
+    margin-left: 8px;
+    font-size: 13px;
+    color: var(--color-primary);
+    text-decoration: underline;
+    background: transparent;
+    cursor: pointer;
+  }
 }
 
 .profile-toggle {
