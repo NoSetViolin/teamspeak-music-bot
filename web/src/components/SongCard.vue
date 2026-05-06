@@ -18,6 +18,9 @@
       <button class="action-btn" @click.stop="$emit('play')" title="播放">
         <Icon icon="mdi:play" />
       </button>
+      <button class="action-btn" @click.stop="$emit('playNext')" title="下一首播放">
+        <Icon icon="mdi:playlist-play" />
+      </button>
       <button class="action-btn" @click.stop="$emit('add')" title="添加到队列">
         <Icon icon="mdi:playlist-plus" />
       </button>
@@ -38,6 +41,7 @@ defineProps<{
 
 defineEmits<{
   play: [];
+  playNext: [];
   add: [];
 }>();
 
