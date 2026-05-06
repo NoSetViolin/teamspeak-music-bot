@@ -352,12 +352,18 @@ export function createPlayerRouter(
       }
       const queue = bot.getQueueManager();
       const wasIdle = bot.getPlayer().getState() === "idle";
+      // Capture the slot addNext WILL insert at, before mutating the queue.
+      // addNext pushes when currentIndex<0 (slot = size); otherwise splices
+      // at currentIndex+1. Using size-1 after addNext was wrong when the
+      // queue had stale currentIndex>=0 while the player was idle (e.g.,
+      // after natural track end without queue.clear()).
+      const insertedAt =
+        queue.getCurrentIndex() < 0 ? queue.size() : queue.getCurrentIndex() + 1;
       queue.addNext(song);
 
       if (wasIdle) {
-        // No current playback — promote the just-added song to current
-        // and start it. addNext fell through to push, so it's the last item.
-        queue.playAt(queue.size() - 1);
+        // Promote the just-added song to current and start it.
+        queue.playAt(insertedAt);
         bot.getPlayer().resetFailures();
         const ok = await bot.resolveAndPlay(queue.current()!);
         if (!ok) {

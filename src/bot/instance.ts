@@ -442,11 +442,19 @@ export class BotInstance extends EventEmitter {
 
     const song = result.songs[0];
     const wasIdle = this.player.getState() === "idle";
+    // Capture the slot addNext WILL insert at, before mutating the queue.
+    // addNext pushes when currentIndex<0 (slot = size); otherwise splices
+    // at currentIndex+1. Using size-1 after addNext was wrong when the
+    // queue had stale currentIndex>=0 while the player was idle (e.g.,
+    // after natural track end without queue.clear()).
+    const insertedAt =
+      this.queue.getCurrentIndex() < 0
+        ? this.queue.size()
+        : this.queue.getCurrentIndex() + 1;
     this.queue.addNext({ ...song, platform: provider.platform });
 
     if (wasIdle) {
-      // Nothing playing — addNext fell through to push, promote and start.
-      this.queue.playAt(this.queue.size() - 1);
+      this.queue.playAt(insertedAt);
       this.player.resetFailures();
       const ok = await this.resolveAndPlay(this.queue.current()!);
       this.emit("stateChange");

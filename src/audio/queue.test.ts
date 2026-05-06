@@ -459,5 +459,29 @@ describe("PlayQueue", () => {
       // prev again → pop 0 → song at index 0 = a
       expect(queue.prev()?.id).toBe("a");
     });
+
+    it("idle player + stale currentIndex: insertion target is currentIndex+1, not size-1", () => {
+      // Reproduces the scenario where the player has gone idle but the
+      // queue still has a non-negative currentIndex (e.g., after natural
+      // track end without queue.clear()).
+      queue.add(makeSong("a"));
+      queue.add(makeSong("b"));
+      queue.add(makeSong("c"));
+      queue.add(makeSong("d"));
+      queue.play();      // current = 0 (a)
+      queue.next();      // current = 1 (b)
+      // Simulate idle-with-stale-currentIndex: the player has gone idle
+      // but queue still points at b.
+      // Caller pre-captures insertedAt:
+      const insertedAt = queue.getCurrentIndex() + 1; // = 2
+      queue.addNext(makeSong("x"));
+      // queue is now [a, b, x, c, d]
+      // size-1 would be 4 (d) — WRONG.
+      // insertedAt is 2 (x) — RIGHT.
+      expect(queue.list().map((s) => s.id)).toEqual(["a", "b", "x", "c", "d"]);
+      expect(queue.size() - 1).toBe(4); // proves size-1 strategy would pick d
+      const promoted = queue.playAt(insertedAt);
+      expect(promoted?.id).toBe("x");
+    });
   });
 });
