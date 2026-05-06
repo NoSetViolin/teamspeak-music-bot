@@ -249,9 +249,30 @@ export function createPlayerRouter(
         return;
       }
 
+      // QQ-specific optimization: many users' QQ playlists contain a
+      // large fraction of songs that return result=104003 (region/copyright
+      // restricted). Batch-resolve URLs once and only queue the playable
+      // ones, otherwise the playback retry loop wastes time guessing.
+      let queueable: { id: string }[] = songs;
+      const totalCount = songs.length;
+      const qqLike = provider as { getPlayableSongIds?: (ids: string[]) => Promise<Set<string>> };
+      if (typeof qqLike.getPlayableSongIds === "function") {
+        const playable = await qqLike.getPlayableSongIds(songs.map((s: { id: string }) => s.id));
+        if (playable.size > 0) {
+          queueable = songs.filter((s: { id: string }) => playable.has(s.id));
+        }
+        // If batch returned nothing, leave queueable as-is and let the
+        // sequential retry path try anyway (handles the case where the
+        // batch endpoint failed entirely).
+      }
+      if (queueable.length === 0) {
+        res.json({ message: `Loaded ${totalCount} songs but none were playable (likely copyright/region restrictions).` });
+        return;
+      }
+
       const queue = bot.getQueueManager();
       queue.clear();
-      for (const song of songs) {
+      for (const song of queueable) {
         queue.add({ ...song, platform: provider.platform });
       }
 
@@ -276,10 +297,13 @@ export function createPlayerRouter(
       }
 
       const playing = queue.current();
+      const loadedMsg = queueable.length < totalCount
+        ? `Loaded ${queueable.length} of ${totalCount} songs (rest are copyright/region restricted)`
+        : `Loaded ${queueable.length} songs`;
       if (started && playing) {
-        res.json({ message: `Loaded ${songs.length} songs. Now playing: ${playing.name}` });
+        res.json({ message: `${loadedMsg}. Now playing: ${playing.name}` });
       } else {
-        res.json({ message: `Loaded ${songs.length} songs but none were playable (likely copyright/region restrictions).` });
+        res.json({ message: `${loadedMsg}, but couldn't start playback.` });
       }
     } catch (err) {
       logger.error({ err }, "Play playlist failed");

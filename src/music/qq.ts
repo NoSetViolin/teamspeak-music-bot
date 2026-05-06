@@ -115,6 +115,36 @@ export class QQMusicProvider implements MusicProvider {
     return null;
   }
 
+  /**
+   * Batch-check which song mids are actually streamable. QQ playlists
+   * (especially collected ones) frequently contain a majority of songs
+   * that return result=104003 ("no copyright/region restricted") for the
+   * current user — a sequential retry loop wastes time guessing.
+   *
+   * The wrapper's /getMusicPlay accepts a comma-separated songmid list
+   * and resolves all of them in a single upstream call (~2-3s for 100+
+   * songs), so this is much cheaper than per-song probing.
+   */
+  async getPlayableSongIds(songIds: string[]): Promise<Set<string>> {
+    if (songIds.length === 0) return new Set();
+    try {
+      const res = await this.api.get("/getMusicPlay", {
+        params: { songmid: songIds.join(","), quality: this.quality, ...this.cookieParams },
+      });
+      const playUrlMap: Record<string, { url?: string }> =
+        res.data?.data?.playUrl ?? {};
+      const playable = new Set<string>();
+      for (const [mid, info] of Object.entries(playUrlMap)) {
+        if (info?.url) playable.add(mid);
+      }
+      return playable;
+    } catch {
+      // On any error, fall through to per-song retry path — return empty
+      // and let the caller try songs sequentially via getSongUrl.
+      return new Set();
+    }
+  }
+
   async getSongDetail(songId: string): Promise<Song | null> {
     // Try /getSongInfo for full metadata, but fall through to a minimal
     // stub if the library endpoint fails (current @sansenjian/qq-music-api
