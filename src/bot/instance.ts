@@ -609,7 +609,7 @@ export class BotInstance extends EventEmitter {
     for (const song of songs) {
       this.queue.add({ ...song, platform: "netease" });
     }
-    this.queue.setMode(PlayMode.RandomLoop);
+    this.queue.setMode(PlayMode.Random);
     this.isFmMode = true;
     this.player.resetFailures();
 
@@ -756,12 +756,12 @@ export class BotInstance extends EventEmitter {
         if (!started) {
           this.player.stop();
           this.profileManager.onSongChange(null).catch(() => {});
-        } else if (this.isFmMode && this.queue.size() - this.queue.getCurrentIndex() <= 3) {
+        } else if (this.isFmMode && this.queue.unplayedCount() <= 3) {
           // Proactive refill: when queue is running low, fetch more FM songs
           this.refillFm().catch(err => this.logger.error({ err }, "Proactive FM refill failed"));
         }
       } else {
-        // Defensive: only reached if play mode is changed away from RandomLoop during FM
+        // Queue exhausted — in FM Random mode, refill and continue
         if (this.isFmMode) {
           await this.refillFm();
           const refillNext = this.queue.next();
