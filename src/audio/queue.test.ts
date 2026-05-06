@@ -363,5 +363,27 @@ describe("PlayQueue", () => {
       queue.prev();    // pops 0, history: []
       expect(queue.prev()).toBeNull(); // no fallback target in random mode
     });
+
+    it("caps history at HISTORY_LIMIT (50) entries, dropping oldest", () => {
+      queue.setMode(PlayMode.Random);
+      // Build a queue large enough to overflow HISTORY_LIMIT
+      for (let i = 0; i < 60; i++) queue.add(makeSong(`s${i}`));
+      // Walk through 60 explicit picks → 59 pushes to history
+      // (playAt pushes the previous currentIndex; first call has -1
+      // which pushHistory rejects). After 60 playAts, history holds
+      // the last 50 of those 59 entries.
+      for (let i = 0; i < 60; i++) queue.playAt(i);
+
+      // Walk back through history. The first prev returns whatever the
+      // 50th-most-recent push was (= index 9, since pushes 0..58 happened
+      // and the oldest 9 fell off). We can verify by counting prevs that
+      // succeed before history exhausts and prev returns null in random.
+      let count = 0;
+      while (queue.prev() !== null) {
+        count++;
+        if (count > 100) break; // safety
+      }
+      expect(count).toBe(50);
+    });
   });
 });

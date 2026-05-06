@@ -86,6 +86,10 @@ export class PlayQueue {
   playAt(index: number): QueuedSong | null {
     if (index < 0 || index >= this.songs.length) return null;
     this.pushHistory(this.currentIndex);
+    // Reset the Random-mode "unplayed" pool — explicit picks restart
+    // shuffle from this point. History tracking is independent and
+    // unaffected by this clear.
+    this.playedIndices.clear();
     this.currentIndex = index;
     this.playedIndices.add(index);
     return this.songs[index];
