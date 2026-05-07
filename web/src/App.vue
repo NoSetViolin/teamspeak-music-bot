@@ -6,6 +6,7 @@
     </main>
     <Player />
     <Toast />
+    <Queue class="mobile-queue" :open="mobileQueueOpen" @close="mobileQueueOpen = false" />
 
     <!-- Mobile mini player -->
     <div v-if="currentSong" class="m-player" @click="router.push('/lyrics')">
@@ -17,12 +18,38 @@
         <div class="m-player-name">{{ currentSong.name }}</div>
         <div class="m-player-artist">{{ currentSong.artist }}</div>
       </div>
-      <button class="m-player-btn" @click.stop="playerStore.isPlaying ? playerStore.pause() : playerStore.resume()">
-        <Icon :icon="playerStore.isPlaying ? 'mdi:pause' : 'mdi:play'" />
-      </button>
-      <button class="m-player-btn" @click.stop="playerStore.next()">
-        <Icon icon="mdi:skip-next" />
-      </button>
+      <div class="m-player-controls" @click.stop>
+        <button class="m-player-btn" @click="playerStore.prev()">
+          <Icon icon="mdi:skip-previous" />
+        </button>
+        <button class="m-player-btn" @click="playerStore.isPlaying ? playerStore.pause() : playerStore.resume()">
+          <Icon :icon="playerStore.isPlaying ? 'mdi:pause' : 'mdi:play'" />
+        </button>
+        <button class="m-player-btn" @click="playerStore.next()">
+          <Icon icon="mdi:skip-next" />
+        </button>
+        <button class="m-player-btn" @click="cycleMobileMode">
+          <Icon :icon="mobileModeIcon" />
+        </button>
+        <button class="m-player-btn" @click="toggleMobileQueue">
+          <Icon icon="mdi:playlist-music" />
+        </button>
+        <button class="m-player-btn" @click="toggleMobileVolume">
+          <Icon icon="mdi:volume-high" />
+        </button>
+      </div>
+      <div v-if="mobileVolumeOpen" class="m-volume-popover" @click.stop>
+        <Icon icon="mdi:volume-high" class="m-volume-icon" />
+        <input
+          type="range"
+          min="0"
+          max="100"
+          :value="mobileVolume"
+          class="m-volume-slider"
+          @input="onMobileVolumeChange"
+        />
+        <span class="m-volume-value">{{ mobileVolume }}</span>
+      </div>
     </div>
 
     <!-- Mobile bottom tab bar -->
@@ -57,6 +84,7 @@ import Navbar from './components/Navbar.vue';
 import Player from './components/Player.vue';
 import CoverArt from './components/CoverArt.vue';
 import Toast from './components/Toast.vue';
+import Queue from './components/Queue.vue';
 
 const playerStore = usePlayerStore();
 const theme = computed(() => playerStore.theme);
@@ -64,6 +92,18 @@ const route = useRoute();
 const router = useRouter();
 const { connect } = useWebSocket();
 const currentSong = computed(() => playerStore.currentSong);
+const mobileVolume = computed(() => playerStore.activeBot?.volume ?? 75);
+const mobileMode = computed(() => playerStore.activeBot?.playMode ?? 'seq');
+const mobileModeOrder = ['seq', 'loop', 'random', 'rloop'];
+const mobileModeIcons: Record<string, string> = {
+  seq: 'mdi:arrow-right',
+  loop: 'mdi:repeat',
+  random: 'mdi:shuffle',
+  rloop: 'mdi:repeat-once',
+};
+const mobileModeIcon = computed(() => mobileModeIcons[mobileMode.value] ?? mobileModeIcons.seq);
+const mobileVolumeOpen = ref(false);
+const mobileQueueOpen = ref(false);
 
 const mobileProgressPct = ref(0);
 let syncTimer: ReturnType<typeof setInterval> | null = null;
@@ -75,6 +115,29 @@ function updateMobileProgress() {
     ? Math.min((playerStore.elapsed / duration) * 100, 100)
     : 0;
   mobileRaf = requestAnimationFrame(updateMobileProgress);
+}
+
+function onMobileVolumeChange(e: Event) {
+  const volume = Number((e.target as HTMLInputElement).value);
+  playerStore.setVolume(volume);
+}
+
+function toggleMobileVolume() {
+  mobileVolumeOpen.value = !mobileVolumeOpen.value;
+  if (mobileVolumeOpen.value) mobileQueueOpen.value = false;
+}
+
+function toggleMobileQueue() {
+  mobileQueueOpen.value = !mobileQueueOpen.value;
+  if (mobileQueueOpen.value) mobileVolumeOpen.value = false;
+}
+
+function cycleMobileMode() {
+  const currentIndex = mobileModeOrder.indexOf(mobileMode.value);
+  const nextMode = mobileModeOrder[(currentIndex + 1) % mobileModeOrder.length] ?? mobileModeOrder[0];
+  mobileVolumeOpen.value = false;
+  mobileQueueOpen.value = false;
+  playerStore.setMode(nextMode);
 }
 
 onMounted(() => {
@@ -132,6 +195,14 @@ onUnmounted(() => {
   }
 }
 
+.mobile-queue {
+  display: none;
+
+  @media (max-width: 768px) {
+    display: flex;
+  }
+}
+
 .m-player-progress {
   position: absolute;
   top: 0;
@@ -151,6 +222,13 @@ onUnmounted(() => {
   min-width: 0;
 }
 
+.m-player-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+
 .m-player-name {
   font-size: 13px;
   font-weight: 500;
@@ -168,14 +246,62 @@ onUnmounted(() => {
 }
 
 .m-player-btn {
-  width: 32px;
+  width: 28px;
   height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 22px;
+  font-size: 20px;
   opacity: 0.85;
   flex-shrink: 0;
+}
+
+.m-volume-popover {
+  position: absolute;
+  right: 8px;
+  bottom: calc(100% + 8px);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: min(260px, calc(100vw - 32px));
+  padding: 10px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-dropdown);
+  cursor: default;
+}
+
+.m-volume-icon {
+  flex: 0 0 auto;
+  font-size: 18px;
+  color: var(--text-secondary);
+}
+
+.m-volume-slider {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 4px;
+  appearance: none;
+  background: var(--border-color);
+  border-radius: 2px;
+  outline: none;
+
+  &::-webkit-slider-thumb {
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    background: var(--color-primary);
+    border-radius: 50%;
+  }
+}
+
+.m-volume-value {
+  flex: 0 0 30px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
 }
 
 // Mobile bottom tab bar
