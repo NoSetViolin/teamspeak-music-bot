@@ -94,10 +94,15 @@ export class BotInstance extends EventEmitter {
       options.tsOptions.nickname,
     );
 
-    const relPath = this.database.getCustomAvatarPath(this.id);
-    if (relPath) {
-      const buf = this.avatarStore.read(relPath);
-      if (buf) this.profileManager.setCustomAvatar(buf);
+    // Best-effort: a corrupted/locked avatar file must not block bot startup.
+    try {
+      const relPath = this.database.getCustomAvatarPath(this.id);
+      if (relPath) {
+        const buf = this.avatarStore.read(relPath);
+        if (buf) this.profileManager.setCustomAvatar(buf);
+      }
+    } catch (err) {
+      this.logger.warn({ err }, "Failed to load custom avatar — skipping");
     }
 
     this.setupPlayerEvents();

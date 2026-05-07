@@ -26,6 +26,12 @@ export class BotProfileManager {
   private config: ProfileConfig;
   private defaultNickname: string;
   private customAvatar: Buffer | null = null;
+  /**
+   * Tracks the last song handed to onSongChange. null means stopped/idle.
+   * Used by setCustomAvatar to decide whether the new buffer should be
+   * pushed immediately (idle) or wait for the next stop event (playing).
+   */
+  private currentSong: QueuedSong | null = null;
 
   /** Per-feature permission-denied flags. Reset on reconnect. */
   private permDenied = {
@@ -59,9 +65,24 @@ export class BotProfileManager {
 
   // --- Public API ---
 
-  /** Set/clear the persistent idle avatar. Pass null to remove. */
+  /**
+   * Set/clear the persistent idle avatar. Pass null to remove.
+   *
+   * If the bot is currently in an idle state (no song playing OR
+   * avatarEnabled is off), the new buffer is pushed to TS3 right away;
+   * otherwise the cover-art sync is in charge until the next stop event,
+   * at which point clearAvatar restores from this.customAvatar.
+   */
   setCustomAvatar(buffer: Buffer | null): void {
     this.customAvatar = buffer;
+    const idle = this.currentSong === null || !this.config.avatarEnabled;
+    if (!idle) return;
+    const gen = ++this.generation;
+    if (buffer && buffer.length > 0) {
+      void this.applyIdleAvatar(gen);
+    } else {
+      void this.clearAvatar(gen);
+    }
   }
 
   /**
@@ -77,6 +98,7 @@ export class BotProfileManager {
    */
   async onSongChange(song: QueuedSong | null): Promise<void> {
     const gen = ++this.generation;
+    this.currentSong = song;
 
     // 1. Avatar first — file transfer uses its own response tracker and
     //    must run before sendCommandNoWait calls whose orphaned responses
@@ -97,6 +119,7 @@ export class BotProfileManager {
   /** Reset permission-denied flags and bump generation on new connection. */
   onConnect(): void {
     this.generation++;
+    this.currentSong = null;
     this.permDenied = {
       avatar: false,
       description: false,
@@ -105,7 +128,9 @@ export class BotProfileManager {
       channelDesc: false,
       nowPlayingMsg: false,
     };
-    if (!this.config.avatarEnabled && this.customAvatar) {
+    // No song is playing on a fresh connect, so the matrix says the
+    // custom avatar should be visible regardless of avatarEnabled.
+    if (this.customAvatar) {
       const gen = this.generation;
       void this.applyIdleAvatar(gen);
     }

@@ -3,12 +3,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, watch } from 'vue';
+import { ref, onMounted, watch, nextTick } from 'vue';
 import axios from 'axios';
 import AvatarUpload from './AvatarUpload.vue';
 
 const props = defineProps<{ botId: string }>();
 const avatarDataUrl = ref<string | null>(null);
+// Stays true until the watcher queued by the load-time assignment has run,
+// so the initial null → loaded-data-url transition does not fire a redundant
+// PUT echoing the just-fetched bytes back to the server.
 let initializing = true;
 
 async function loadCurrent() {
@@ -22,6 +25,9 @@ async function loadCurrent() {
     }
     avatarDataUrl.value = null;
   } finally {
+    // Wait for the watcher's flush queue to drain (it'll see initializing=true
+    // and bail), then release for real user-driven changes.
+    await nextTick();
     initializing = false;
   }
 }
