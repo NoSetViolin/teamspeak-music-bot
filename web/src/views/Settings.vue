@@ -80,6 +80,10 @@
             <label>服务器密码（可选）</label>
             <input v-model="editForm.serverPassword" class="input" type="password" placeholder="服务器有密码时填写" />
           </div>
+          <div class="form-group">
+            <label>自定义头像</label>
+            <CustomAvatarRow :bot-id="editingBot" />
+          </div>
           <div class="modal-actions">
             <button class="btn-secondary" @click="editingBot = null">取消</button>
             <button class="btn-primary" @click="saveEditBot">保存（需重启机器人生效）</button>
