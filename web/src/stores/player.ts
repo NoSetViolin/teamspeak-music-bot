@@ -376,11 +376,15 @@ export const usePlayerStore = defineStore('player', {
     async setVolume(volume: number) {
       if (!this.activeBotId) return;
       await axios.post(`/api/player/${this.activeBotId}/volume`, { volume });
+      const bot = this.bots.find((b) => b.id === this.activeBotId);
+      if (bot) bot.volume = volume;
     },
 
     async setMode(mode: string) {
       if (!this.activeBotId) return;
       await axios.post(`/api/player/${this.activeBotId}/mode`, { mode });
+      const bot = this.bots.find((b) => b.id === this.activeBotId);
+      if (bot) bot.playMode = mode;
     },
 
     async fetchHomeData() {
