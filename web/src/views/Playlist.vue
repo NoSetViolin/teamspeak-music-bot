@@ -107,10 +107,14 @@ onMounted(async () => {
   if (detail) {
     playlist.value = detail;
   } else if (songList.length > 0) {
-    // Fall back to a stub built from the route + first song's cover.
+    // Fall back to a stub built from the route + first song. For albums,
+    // every song's `album` field carries the real album name.
+    const fallbackName = kind === 'album'
+      ? (songList[0]?.album || '专辑')
+      : '歌单';
     playlist.value = {
       id,
-      name: kind === 'album' ? '专辑' : '歌单',
+      name: fallbackName,
       description: '',
       coverUrl: songList[0]?.coverUrl ?? '',
       songCount: songList.length,
