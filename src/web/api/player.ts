@@ -313,6 +313,78 @@ export function createPlayerRouter(
     }
   });
 
+  // Play an album by ID — mirrors play-playlist but calls getAlbumSongs
+  router.post("/:botId/play-album", async (req, res) => {
+    try {
+      const bot = (req as any).bot;
+      const { albumId, platform } = req.body;
+      const provider = bot.getProviderFor(
+        platform === "bilibili" || platform === "qq" || platform === "youtube"
+          ? platform
+          : "netease"
+      );
+
+      // Stop current playback
+      bot.getPlayer().stop();
+      bot.getPlayer().resetFailures();
+
+      const songs = await provider.getAlbumSongs(albumId);
+      if (songs.length === 0) {
+        res.json({ message: "Album is empty" });
+        return;
+      }
+
+      // QQ-specific optimization: batch-resolve playable IDs to avoid
+      // wasting retries on region/copyright-restricted tracks.
+      let queueable: { id: string }[] = songs;
+      const totalCount = songs.length;
+      const qqLike = provider as { getPlayableSongIds?: (ids: string[]) => Promise<Set<string> | null> };
+      if (typeof qqLike.getPlayableSongIds === "function") {
+        const playable = await qqLike.getPlayableSongIds(songs.map((s: { id: string }) => s.id));
+        if (playable !== null) {
+          queueable = songs.filter((s: { id: string }) => playable.has(s.id));
+        }
+      }
+      if (queueable.length === 0) {
+        res.json({ ok: false, message: `专辑 ${totalCount} 首歌曲均无版权可播放（区域/版权限制）` });
+        return;
+      }
+
+      const queue = bot.getQueueManager();
+      queue.clear();
+      for (const song of queueable) {
+        queue.add({ ...song, platform: provider.platform });
+      }
+
+      const mode = queue.getMode();
+      let first;
+      if (mode === "random" || mode === "rloop") {
+        const idx = Math.floor(Math.random() * queue.size());
+        first = queue.playAt(idx);
+      } else {
+        first = queue.play();
+      }
+
+      let started = first ? await bot.resolveAndPlay(first) : false;
+      if (first && !started) {
+        started = await bot.playNext(20);
+      }
+
+      const playing = queue.current();
+      const loadedMsg = queueable.length < totalCount
+        ? `已加载 ${queueable.length}/${totalCount} 首（其余区域/版权限制）`
+        : `已加载 ${queueable.length} 首`;
+      if (started && playing) {
+        res.json({ ok: true, message: `${loadedMsg}，正在播放：${playing.name}` });
+      } else {
+        res.json({ ok: false, message: `${loadedMsg}，但无法开始播放。` });
+      }
+    } catch (err) {
+      logger.error({ err }, "play-album failed");
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // Play a single song by ID — resolves URL on demand
   router.post("/:botId/play-song", async (req, res) => {
     try {

@@ -38,7 +38,7 @@
       </div>
     </template>
 
-    <div v-else class="loading">歌单不存在或加载失败</div>
+    <div v-else class="loading">{{ kind === 'album' ? '专辑' : '歌单' }}不存在或加载失败</div>
   </div>
 </template>
 
@@ -64,6 +64,8 @@ interface PlaylistDetail {
   songCount: number;
 }
 
+const kind = (route.meta.kind as string) ?? 'playlist'; // 'playlist' | 'album'
+
 const playlist = ref<PlaylistDetail | null>(null);
 const songs = ref<Song[]>([]);
 const loading = ref(true);
@@ -71,20 +73,32 @@ const loading = ref(true);
 async function playAll() {
   const id = route.params.id as string;
   const platform = (route.query.platform as string) || 'netease';
-  await store.playPlaylist(id, platform);
+  if (kind === 'album') {
+    await store.playAlbum(id, platform);
+  } else {
+    await store.playPlaylist(id, platform);
+  }
 }
 
 onMounted(async () => {
   const id = route.params.id as string;
   const platform = (route.query.platform as string) || 'netease';
 
+  const detailUrl = kind === 'album'
+    ? `/api/music/album/${id}/detail`
+    : `/api/music/playlist/${id}/detail`;
+  const songsUrl = kind === 'album'
+    ? `/api/music/album/${id}`
+    : `/api/music/playlist/${id}`;
+
   // allSettled, not Promise.all — if detail 404s but songs is fine
   // (e.g., a QQ playlist whose detail endpoint flaked but the song
   // list resolved), we still want to show the songs rather than
-  // the "歌单不存在" empty state.
+  // the "不存在" empty state. For albums, detail always 404s — that
+  // is intentional; the fallback stub below handles it.
   const [detailRes, songsRes] = await Promise.allSettled([
-    axios.get(`/api/music/playlist/${id}/detail`, { params: { platform } }),
-    axios.get(`/api/music/playlist/${id}`, { params: { platform } }),
+    axios.get(detailUrl, { params: { platform } }),
+    axios.get(songsUrl, { params: { platform } }),
   ]);
 
   const detail = detailRes.status === 'fulfilled' ? detailRes.value.data?.playlist : null;
@@ -93,10 +107,14 @@ onMounted(async () => {
   if (detail) {
     playlist.value = detail;
   } else if (songList.length > 0) {
-    // Fall back to a stub built from the route + first song's cover.
+    // Fall back to a stub built from the route + first song. For albums,
+    // every song's `album` field carries the real album name.
+    const fallbackName = kind === 'album'
+      ? (songList[0]?.album || '专辑')
+      : '歌单';
     playlist.value = {
       id,
-      name: '歌单',
+      name: fallbackName,
       description: '',
       coverUrl: songList[0]?.coverUrl ?? '',
       songCount: songList.length,
@@ -104,7 +122,7 @@ onMounted(async () => {
   } else {
     playlist.value = null;
     if (detailRes.status === 'rejected') {
-      console.error('Failed to load playlist detail:', (detailRes.reason as any)?.response?.status, (detailRes.reason as any)?.message);
+      console.error('Failed to load detail:', (detailRes.reason as any)?.response?.status, (detailRes.reason as any)?.message);
     }
   }
   songs.value = songList;

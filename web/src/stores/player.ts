@@ -322,6 +322,16 @@ export const usePlayerStore = defineStore('player', {
       this._syncAfterAction();
     },
 
+    async playAlbum(albumId: string, platform = 'netease') {
+      if (!this.activeBotId) return;
+      const res = await axios.post(`/api/player/${this.activeBotId}/play-album`, { albumId, platform });
+      if (res.data?.message) {
+        this.notify(res.data.message, res.data.ok === false ? 'error' : 'info');
+      }
+      this._setTiming(this.activeBotId, { serverElapsed: 0 });
+      this._syncAfterAction();
+    },
+
     async pause() {
       if (!this.activeBotId) return;
       // Freeze elapsed at current interpolated value

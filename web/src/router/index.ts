@@ -22,6 +22,13 @@ const router = createRouter({
       path: '/playlist/:id',
       name: 'playlist',
       component: () => import('../views/Playlist.vue'),
+      meta: { kind: 'playlist' },
+    },
+    {
+      path: '/album/:id',
+      name: 'album',
+      component: () => import('../views/Playlist.vue'),
+      meta: { kind: 'album' },
     },
     {
       path: '/lyrics',
