@@ -1672,7 +1672,7 @@ describe("cmdPlaylist with a playlist link (#160)", () => {
 });
 
 describe("voice transport commands", () => {
-  it("routes pause and resume through the existing command handler", async () => {
+  it("routes playback controls through the existing command handler", async () => {
     const executeCommand = vi.fn().mockResolvedValue("Paused");
     const sendVoiceRequestMessage = vi.fn();
     const ctx = {
@@ -1685,7 +1685,9 @@ describe("voice transport commands", () => {
     const handle = (BotInstance.prototype as any).handleVoicePlayRequest;
     await handle.call(ctx, 42, "暂停");
     await handle.call(ctx, 42, "继续");
-    expect(executeCommand.mock.calls.map(([command]) => command.name)).toEqual(["pause", "resume"]);
+    await handle.call(ctx, 42, "上一首");
+    await handle.call(ctx, 42, "下一首");
+    expect(executeCommand.mock.calls.map(([command]) => command.name)).toEqual(["pause", "resume", "prev", "next"]);
     expect(executeCommand.mock.calls[0][2]).toBe("listener");
     expect(sendVoiceRequestMessage).toHaveBeenCalledWith("🎤 Paused");
   });

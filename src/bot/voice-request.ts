@@ -155,7 +155,7 @@ export class VoiceRequestController {
   }
 }
 
-export type VoiceCommand = { name: "play"; query: string } | { name: "pause" | "resume" };
+export type VoiceCommand = { name: "play"; query: string } | { name: "pause" | "resume" | "prev" | "next" };
 
 /** Parse the one command spoken after a successful wake. */
 export function parseVoiceCommand(transcript: string): VoiceCommand | null {
@@ -164,6 +164,8 @@ export function parseVoiceCommand(transcript: string): VoiceCommand | null {
     .replace(/[。！？!?，,]+$/u, "").trim();
   if (clean === "暂停") return { name: "pause" };
   if (clean === "继续") return { name: "resume" };
+  if (clean === "上一首") return { name: "prev" };
+  if (clean === "下一首") return { name: "next" };
   const match = clean.match(/^(?:请|帮我|给我|我要|我想|麻烦你|你能)?\s*(?:我要听|播放|点歌|放一首|来一首|放|来)\s*(.+)$/u);
   if (!match) return null;
   const query = match[1].trim();

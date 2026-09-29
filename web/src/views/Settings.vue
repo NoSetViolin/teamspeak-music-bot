@@ -796,7 +796,7 @@
       <label class="profile-toggle behavior-toggle">
         <div class="profile-toggle-text">
           <div class="profile-toggle-label">频道语音点歌</div>
-          <div class="profile-toggle-hint">说“布鲁斯 布鲁斯”，听到提示音后说“我要听／放一首／播放／点歌＋歌名”，或说“暂停”“继续”。离线识别；默认关闭。</div>
+          <div class="profile-toggle-hint">说“布鲁斯 布鲁斯”，听到提示音后说“我要听／放一首／播放／点歌＋歌名”，或说“暂停”“继续”“上一首”“下一首”。离线识别；默认关闭。</div>
           <div v-if="!voiceRequestModelsReady" class="profile-toggle-hint">模型未安装：在服务端运行 npm run setup:voice 后刷新页面。</div>
           <div v-if="voiceRequestMessage" class="profile-toggle-hint" role="status">{{ voiceRequestMessage }}</div>
         </div>

@@ -21,6 +21,13 @@ describe("parseVoiceCommand", () => {
     expect(parseVoiceCommand("布鲁斯布鲁斯，暂停")).toEqual({ name: "pause" });
   });
 
+  it("parses previous and next track commands", () => {
+    expect(parseVoiceCommand("上一首。")).toEqual({ name: "prev" });
+    expect(parseVoiceCommand("下一首！")).toEqual({ name: "next" });
+    expect(parseVoiceCommand("布鲁斯布鲁斯，上一首")).toEqual({ name: "prev" });
+    expect(parseVoiceCommand("布鲁斯 布鲁斯，下一首")).toEqual({ name: "next" });
+  });
+
   it("does not turn an unrelated voice command into a song search", () => {
     expect(parseVoiceCommand("跳过这首歌")).toBeNull();
     expect(parseVoiceCommand("暂停播放")).toBeNull();

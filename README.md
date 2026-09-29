@@ -8,6 +8,8 @@
   <strong>TeamSpeak 音乐机器人</strong> — 网易云音乐 + QQ 音乐 + 酷狗音乐 + 哔哩哔哩 + YouTube（可选），Jellyfin / Spotify 可选启用，YesPlayMusic 风格 WebUI 控制面板
 </p>
 
+开发与维护说明：[架构文档](ARCHITECTURE.md)。
+
 <p align="center">
   <img src="https://img.shields.io/badge/Node.js-20%20%7C%2022%20LTS-339933?logo=nodedotjs&logoColor=white" />
   <img src="https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white" />
@@ -409,7 +411,7 @@ sudo systemctl start tsmusicbot
 
 管理员先在机器人所在机器运行 `npm run setup:voice` 下载离线唤醒词、语音活动检测和中文识别模型（约 200 MB 下载，模型保存在 `data/voice-models/`）。然后在 WebUI「设置 → 机器人行为」启用「频道语音点歌」；默认关闭。Docker 部署时可在容器内运行同一命令，模型位于持久化的 `data/` 卷。
 
-在机器人所在频道说「布鲁斯 布鲁斯」，听到短提示音后说「我要听 晴天」「放一首 晴天」「播放 晴天」或「点歌 周杰伦的晴天」；也可以说「暂停」或「继续」控制播放。每次唤醒只接受唤醒者随后的一句指令。点歌按现有 `!play` 规则立即播放，受默认音源和「直接播放单曲时不清空队列」设置影响；暂停和继续沿用 `!pause`、`!resume`。没有听清或执行失败时会在频道发送文字反馈。识别在本机运行；搜索和获取歌曲仍需要对应音源的网络服务。歌曲名识别及误唤醒情况应在实际频道中调试。
+在机器人所在频道说「布鲁斯 布鲁斯」，听到短提示音后说「我要听 晴天」「放一首 晴天」「播放 晴天」或「点歌 周杰伦的晴天」；也可以说「暂停」「继续」「上一首」或「下一首」控制播放。每次唤醒只接受唤醒者随后的一句指令。点歌按现有 `!play` 规则立即播放，受默认音源和「直接播放单曲时不清空队列」设置影响；播放控制沿用现有的 `!pause`、`!resume`、`!prev` 和 `!next` 行为。没有听清或执行失败时会在频道发送文字反馈。识别在本机运行；搜索和获取歌曲仍需要对应音源的网络服务。歌曲名识别及误唤醒情况应在实际频道中调试。
 
 ### TeamSpeak 命令权限（管理类命令限制）
 

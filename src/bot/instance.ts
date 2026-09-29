@@ -704,7 +704,7 @@ export class BotInstance extends EventEmitter {
     if (!this.connected || !this.config.voiceRequest.enabled) return;
     const command = parseVoiceCommand(transcript);
     if (!command) {
-      await this.sendVoiceRequestMessage(`🎤 没听懂语音指令：${transcript.slice(0, 80) || "空白"}。请说“播放 歌名”、“暂停”或“继续”。`);
+      await this.sendVoiceRequestMessage(`🎤 没听懂语音指令：${transcript.slice(0, 80) || "空白"}。请说“播放 歌名”、“暂停”、“继续”、“上一首”或“下一首”。`);
       return;
     }
     const requester = this.voiceClientNames.get(clientId) ?? `频道用户 ${clientId}`;
