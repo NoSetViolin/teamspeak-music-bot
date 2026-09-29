@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 
 export const VOICE_MODEL_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "data", "voice-models");
 export const WAKE_PHRASE = "布鲁斯布鲁斯";
-const KEYWORD_LINE = "b ù l ǔ s ī b ù l ǔ s ī :2.0 #0.5 @布鲁斯布鲁斯\n";
+const KEYWORD_LINE = "b ù l ǔ s ī b ù l ǔ s ī :1.2 #0.5 @布鲁斯布鲁斯\n";
 const KWS_DIR = "sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01";
 const ASR_DIR = "sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17";
 
