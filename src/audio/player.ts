@@ -1,7 +1,7 @@
 import { spawn, execSync, type ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { createRequire } from "node:module";
-import { accessSync, chmodSync, constants, mkdtempSync, rmSync } from "node:fs";
+import { accessSync, chmodSync, constants, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createOpusEncoder, PCM_FRAME_BYTES, type Encoder } from "./encoder.js";
@@ -173,6 +173,8 @@ export class AudioPlayer extends EventEmitter {
   private duckingRampStartedAt = 0;
   private duckingRampDurationMs = 0;
   private pcmBuffer: Buffer = Buffer.alloc(0);
+  private cueFrames: Buffer[] = [];
+  private cueTimer: ReturnType<typeof setTimeout> | null = null;
   private logger: Logger;
   private frameLoopRunning = false;
   private nextFrameTime = 0;
@@ -701,7 +703,7 @@ export class AudioPlayer extends EventEmitter {
       // External mode: the sidecar PCM stream is long-lived and must NOT end on
       // a transient underrun. Emit an encoded silence frame so the 20ms voice
       // timeline stays continuous instead of returning (which would desync TS).
-      if (this.externalMode) this.emitSilenceFrame();
+      if (this.externalMode || this.cueFrames.length > 0) this.emitSilenceFrame();
       return;
     }
     const pcmFrame = this.pcmBuffer.subarray(0, PCM_FRAME_BYTES);
@@ -718,7 +720,7 @@ export class AudioPlayer extends EventEmitter {
     }
 
     try {
-      const adjusted = this.applyVolume(pcmFrame);
+      const adjusted = this.mixCue(this.applyVolume(pcmFrame));
       const opusFrame = this.encoder.encode(adjusted);
       this.emit("frame", opusFrame);
       this.framesPlayed++;
@@ -734,12 +736,53 @@ export class AudioPlayer extends EventEmitter {
 
   private emitSilenceFrame(): void {
     try {
-      const opusFrame = this.encoder.encode(Buffer.alloc(PCM_FRAME_BYTES));
+      const opusFrame = this.encoder.encode(this.mixCue(Buffer.alloc(PCM_FRAME_BYTES)));
       this.emit("frame", opusFrame);
       this.framesPlayed++;
     } catch (err) {
       this.emit("error", err as Error);
     }
+  }
+
+  /** Play the supplied acknowledgement, mixed after music volume/ducking. */
+  playWakeCue(): void {
+    this.cueFrames = [];
+    // The asset is 48 kHz stereo signed 16-bit PCM, matching the Opus input.
+    const audio = readFileSync(new URL("../../assets/active.s16le", import.meta.url));
+    const frameCount = Math.ceil(audio.length / PCM_FRAME_BYTES);
+    for (let frame = 0; frame < frameCount; frame++) {
+      const pcm = Buffer.alloc(PCM_FRAME_BYTES);
+      audio.copy(pcm, 0, frame * PCM_FRAME_BYTES, (frame + 1) * PCM_FRAME_BYTES);
+      this.cueFrames.push(pcm);
+    }
+    if (this.state !== "playing") this.scheduleCueFrame();
+  }
+
+  clearWakeCue(): void {
+    this.cueFrames = [];
+    if (this.cueTimer) clearTimeout(this.cueTimer);
+    this.cueTimer = null;
+  }
+
+  private scheduleCueFrame(): void {
+    if (this.cueTimer || this.cueFrames.length === 0) return;
+    this.cueTimer = setTimeout(() => {
+      this.cueTimer = null;
+      if (this.state === "playing") return;
+      this.emitSilenceFrame();
+      this.scheduleCueFrame();
+    }, 20);
+  }
+
+  private mixCue(music: Buffer): Buffer {
+    const cue = this.cueFrames.shift();
+    if (!cue) return music;
+    const mixed = Buffer.from(music);
+    for (let i = 0; i < PCM_FRAME_BYTES; i += 2) {
+      const value = music.readInt16LE(i) + Math.round(cue.readInt16LE(i) * 0.5);
+      mixed.writeInt16LE(Math.max(-32768, Math.min(32767, value)), i);
+    }
+    return mixed;
   }
 
   private applyVolume(pcm: Buffer): Buffer {

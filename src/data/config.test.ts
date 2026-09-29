@@ -55,6 +55,16 @@ describe("config", () => {
     });
   });
 
+  it("keeps voice requests opt-in even for malformed saved settings", () => {
+    expect(getDefaultConfig().voiceRequest).toEqual({ enabled: false });
+    const dir = makeTmpDir();
+    const path = join(dir, "config.json");
+    writeFileSync(path, JSON.stringify({ voiceRequest: { enabled: "yes" } }));
+    expect(loadConfig(path).voiceRequest.enabled).toBe(false);
+    writeFileSync(path, JSON.stringify({ voiceRequest: { enabled: true } }));
+    expect(loadConfig(path).voiceRequest.enabled).toBe(true);
+  });
+
   it("fills voiceDucking defaults for legacy and partial configs", () => {
     const dir = makeTmpDir();
     const legacyPath = join(dir, "legacy.json");

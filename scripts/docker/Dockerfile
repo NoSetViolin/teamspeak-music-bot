@@ -36,13 +36,14 @@ FROM node:22-slim
 # binary that can SIGSEGV inside Docker (incompatible glibc / missing libs).
 # System-installed FFmpeg is always compatible with the container runtime.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ffmpeg && \
+    ffmpeg tar ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
 # Copy built output and pre-compiled production node_modules from builder
 COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/assets ./assets
 COPY --from=builder /app/web/dist ./web/dist
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/node_modules ./node_modules
@@ -51,6 +52,7 @@ COPY --from=builder /app/node_modules ./node_modules
 # goes through npm, but an interactive `docker exec ... npm start` would
 # otherwise die on a missing script rather than starting the bot.
 COPY --from=builder /app/scripts/check-native.mjs ./scripts/check-native.mjs
+COPY --from=builder /app/scripts/setup-voice-models.mjs ./scripts/setup-voice-models.mjs
 # ...and the module it imports for crash-proof logging.
 COPY --from=builder /app/scripts/lib/console-log.mjs ./scripts/lib/console-log.mjs
 

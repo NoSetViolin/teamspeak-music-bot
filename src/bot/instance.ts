@@ -4,6 +4,7 @@ import {
   type TS3ClientOptions,
   type TS3TextMessage,
   type TS3VoiceActivity,
+  type TS3VoiceData,
 } from "../ts-protocol/client.js";
 import { AudioPlayer } from "../audio/player.js";
 import { PlayQueue, PlayMode, type QueuedSong } from "../audio/queue.js";
@@ -44,6 +45,7 @@ import { SpotifyController } from "../music/spotify/controller.js";
 import type { SpotifyTrackEndedEvent } from "../music/spotify/backend.js";
 import type { SpotifyOAuth } from "../music/spotify/spotify-oauth.js";
 import { VoiceDuckingController } from "./voice-ducking.js";
+import { VoiceRequestController, parseVoiceCommand } from "./voice-request.js";
 import {
   ManagedVoiceClientRegistry,
   type ManagedVoiceClientOwnerToken,
@@ -160,6 +162,8 @@ export class BotInstance extends EventEmitter {
   private tsClient: TS3Client;
   private player: AudioPlayer;
   private voiceDucking: VoiceDuckingController;
+  private voiceRequest: VoiceRequestController;
+  private voiceClientNames = new Map<number, string>();
   private managedVoiceClients: ManagedVoiceClientRegistry;
   private readonly configuredVoiceServerScope: ManagedVoiceClientScope;
   private voiceServerScope: ManagedVoiceClientScope;
@@ -229,6 +233,19 @@ export class BotInstance extends EventEmitter {
       this.player,
       this.config.voiceDucking ?? { enabled: false, volumePercent: 30 },
     );
+    this.voiceRequest = new VoiceRequestController(this.logger, {
+      onWake: () => this.player.playWakeCue(),
+      onResult: (clientId, text) => {
+        void this.handleVoicePlayRequest(clientId, text);
+      },
+      onFailure: (_clientId, reason) => {
+        void this.sendVoiceRequestMessage(`🎤 ${reason}`);
+      },
+      onUnavailable: (reason) => {
+        this.tsClient.setVoiceDataEnabled(false);
+        void this.sendVoiceRequestMessage(`🎤 ${reason}`);
+      },
+    });
     this.managedVoiceClients =
       options.managedVoiceClients ?? new ManagedVoiceClientRegistry();
     this.configuredVoiceServerScope = {
@@ -405,6 +422,10 @@ export class BotInstance extends EventEmitter {
       this.connected = false;
       this.unregisterManagedVoiceClient(MANAGED_VOICE_CLIENT_RELEASE_GRACE_MS);
       this.voiceDucking.reset(true);
+      this.voiceRequest.stop();
+      this.tsClient.setVoiceDataEnabled(false);
+      this.voiceClientNames.clear();
+      this.player.clearWakeCue();
       // Cancel any pending live-queue snapshot BEFORE clearing the queue: a
       // debounced snapshot firing after clear() would persist an empty queue
       // (clearQueueState), wiping the state we want to restore on reconnect —
@@ -447,6 +468,15 @@ export class BotInstance extends EventEmitter {
       this.voiceDucking.handleVoiceActivity(activity.clientId);
     });
 
+    this.tsClient.on("voiceData", (voice: TS3VoiceData) => {
+      if (!this.connected || !this.config.voiceRequest.enabled) return;
+      if (
+        this.managedVoiceClients.hasClientUid(voice.clientUid) ||
+        this.managedVoiceClients.has(this.voiceServerScope, voice.clientId)
+      ) return;
+      this.voiceRequest.receive(voice);
+    });
+
     // React near-instantly to channel membership changes. The 30s idle
     // poller remains the fallback if any of these events are missed.
     //
@@ -454,12 +484,15 @@ export class BotInstance extends EventEmitter {
     // because the occupancy query (clientlist) times out whenever another
     // client is present — i.e. exactly when a listener returns — so it cannot
     // be used to confirm the return. See _resumeIfReturning().
-    this.tsClient.on("clientEnter", () => {
+    this.tsClient.on("clientEnter", (client: { id: number; nickname: string }) => {
+      this.voiceClientNames.set(client.id, client.nickname);
       this._resumeIfReturning();
       void this.refreshOccupancy();
     });
     this.tsClient.on("clientLeave", (event: { id: number }) => {
       this.voiceDucking.removeSpeaker(event.id);
+      this.voiceRequest.removeSpeaker(event.id);
+      this.voiceClientNames.delete(event.id);
       void this.refreshOccupancy();
     });
     this.tsClient.on("clientMoved", (event: { id: number; targetChannelID: bigint }) => {
@@ -467,6 +500,8 @@ export class BotInstance extends EventEmitter {
         // Moving the bot invalidates every activity deadline from its old
         // channel even if no individual leave events arrive.
         this.voiceDucking.reset(false);
+        this.voiceRequest.cancel();
+        this.voiceClientNames.clear();
         // Carry the now-playing channel description over to the new
         // channel instead of leaving it stale in the old one (#159).
         this.profileManager.onChannelMoved(event.targetChannelID).catch((err) => {
@@ -474,6 +509,8 @@ export class BotInstance extends EventEmitter {
         });
       } else {
         this.voiceDucking.removeSpeaker(event.id);
+        this.voiceRequest.removeSpeaker(event.id);
+        this.voiceClientNames.delete(event.id);
       }
       void this.refreshOccupancy();
     });
@@ -554,6 +591,7 @@ export class BotInstance extends EventEmitter {
 
   async connect(): Promise<void> {
     this.disconnectEmitted = false;
+    this.voiceClientNames.clear();
     await this.tsClient.connect();
     const resolvedEndpoint = this.tsClient.getResolvedVoiceEndpoint();
     this.voiceServerScope = {
@@ -575,6 +613,8 @@ export class BotInstance extends EventEmitter {
     // registering in that callback could let a cancelled, late handshake
     // overwrite a newer instance that reused the same client id.
     this.voiceDucking.reset(true);
+    this.tsClient.setVoiceDataEnabled(this.config.voiceRequest.enabled);
+    this.voiceRequest.setEnabled(this.config.voiceRequest.enabled);
     this.registerManagedVoiceClient();
     this.profileManager.onConnect();
     this.emit("connected");
@@ -587,6 +627,10 @@ export class BotInstance extends EventEmitter {
   disconnect(): void {
     this._cancelIdleTimer();
     this.voiceDucking.reset(true);
+    this.voiceRequest.stop();
+    this.tsClient.setVoiceDataEnabled(false);
+    this.voiceClientNames.clear();
+    this.player.clearWakeCue();
     // Cancel any pending live-queue snapshot before clearing so it can't fire
     // afterwards and persist an empty queue over the state we keep for restore
     // (#119). The disconnected handler cancels too, but do it here as well for
@@ -637,6 +681,41 @@ export class BotInstance extends EventEmitter {
   updateVoiceDucking(settings: VoiceDuckingConfig): void {
     this.config.voiceDucking = { ...settings };
     this.voiceDucking.updateSettings(settings);
+  }
+
+  updateVoiceRequest(enabled: boolean): void {
+    this.config.voiceRequest.enabled = enabled;
+    this.tsClient.setVoiceDataEnabled(this.connected && enabled);
+    if (this.connected) this.voiceRequest.setEnabled(enabled);
+    else this.voiceRequest.stop();
+    if (!enabled) this.player.clearWakeCue();
+  }
+
+  private async sendVoiceRequestMessage(message: string): Promise<void> {
+    if (!this.connected || !this.config.voiceRequest.enabled) return;
+    try {
+      await this.tsClient.sendTextMessage(message);
+    } catch (err) {
+      this.logger.warn({ err }, "Voice request feedback failed");
+    }
+  }
+
+  private async handleVoicePlayRequest(clientId: number, transcript: string): Promise<void> {
+    if (!this.connected || !this.config.voiceRequest.enabled) return;
+    const command = parseVoiceCommand(transcript);
+    if (!command) {
+      await this.sendVoiceRequestMessage(`🎤 没听懂语音指令：${transcript.slice(0, 80) || "空白"}。请说“播放 歌名”、“暂停”或“继续”。`);
+      return;
+    }
+    const requester = this.voiceClientNames.get(clientId) ?? `频道用户 ${clientId}`;
+    try {
+      const query = command.name === "play" ? command.query : "";
+      const reply = await this.executeCommand({ name: command.name, args: query, rawArgs: query ? [query] : [], flags: new Set() }, undefined, requester);
+      if (reply) await this.sendVoiceRequestMessage(`🎤 ${reply}`);
+    } catch (err) {
+      this.logger.warn({ err, clientId, command }, "Voice command failed");
+      await this.sendVoiceRequestMessage("🎤 语音指令执行失败，请稍后重试");
+    }
   }
 
   private _startIdlePoller(): void {

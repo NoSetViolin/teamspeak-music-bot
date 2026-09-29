@@ -2,6 +2,7 @@ import { Router } from "express";
 import type { BotManager } from "../../bot/manager.js";
 import type { BotConfig, GuestModeConfig, SpotifyConfig, JellyfinConfig, GateableProvider } from "../../data/config.js";
 import { saveConfig, GATEABLE_PROVIDERS } from "../../data/config.js";
+import { missingVoiceModels } from "../../bot/voice-models.js";
 import type { Logger } from "../../logger.js";
 import type { BotDatabase } from "../../data/database.js";
 import type { AvatarStore } from "../../data/avatars.js";
@@ -72,6 +73,7 @@ export function createBotRouter(
       idleTimeoutMinutes: config.idleTimeoutMinutes ?? 0,
       autoPauseOnEmpty: config.autoPauseOnEmpty,
       voiceDucking: config.voiceDucking,
+      voiceRequest: { ...config.voiceRequest, modelsReady: missingVoiceModels().length === 0 },
       localAudioEnabled: config.localAudioEnabled,
       savedQueuesEnabled: config.savedQueuesEnabled,
       playKeepsQueue: config.playKeepsQueue,
@@ -92,6 +94,7 @@ export function createBotRouter(
       autoPauseOnEmpty,
       localAudioEnabled,
       voiceDucking,
+      voiceRequest,
       guestMode,
       adminGroups,
     } = req.body;
@@ -128,6 +131,15 @@ export function createBotRouter(
       ) {
         config.voiceDucking.volumePercent = voiceDucking.volumePercent;
       }
+    }
+
+    const hasVoiceRequest = voiceRequest !== null && typeof voiceRequest === "object" && !Array.isArray(voiceRequest);
+    if (hasVoiceRequest && typeof voiceRequest.enabled === "boolean") {
+      if (voiceRequest.enabled && missingVoiceModels().length > 0) {
+        res.status(400).json({ error: "Voice models are missing. Run npm run setup:voice first." });
+        return;
+      }
+      config.voiceRequest.enabled = voiceRequest.enabled;
     }
 
     // Saved-queues + play-keeps-queue toggles (default off). Both read live from
@@ -274,12 +286,14 @@ export function createBotRouter(
       if (hasIdle) bot.updateIdleTimeout(config.idleTimeoutMinutes);
       if (hasAutoPause) bot.updateAutoPause(config.autoPauseOnEmpty);
       if (hasVoiceDucking) bot.updateVoiceDucking(config.voiceDucking);
+      if (hasVoiceRequest) bot.updateVoiceRequest(config.voiceRequest.enabled);
     }
 
     res.json({
       idleTimeoutMinutes: config.idleTimeoutMinutes ?? 0,
       autoPauseOnEmpty: config.autoPauseOnEmpty,
       voiceDucking: config.voiceDucking,
+      voiceRequest: { ...config.voiceRequest, modelsReady: missingVoiceModels().length === 0 },
       localAudioEnabled: config.localAudioEnabled,
       savedQueuesEnabled: config.savedQueuesEnabled,
       playKeepsQueue: config.playKeepsQueue,

@@ -80,6 +80,11 @@ export interface TS3VoiceActivity {
   clientUid?: string;
 }
 
+export interface TS3VoiceData extends TS3VoiceActivity {
+  /** Encoded Opus payload, copied only while a voice listener is attached. */
+  data: Buffer;
+}
+
 // Command notifications and UDP voice packets can be reordered in flight.
 // Retain a leaving client's UID briefly so its final packet is still
 // attributable; a new clientEnter for the same id cancels and overwrites it.
@@ -107,6 +112,7 @@ export class TS3Client extends EventEmitter {
   private identity: Identity;
   private readonly clientUid: string;
   private clientId = 0;
+  private voiceDataEnabled = false;
   private readonly visibleClientUids = new Map<number, string>();
   private readonly visibleClientUidReleaseTimers = new Map<
     number,
@@ -268,6 +274,9 @@ export class TS3Client extends EventEmitter {
         ...(clientUid ? { clientUid } : {}),
       };
       this.emit("voiceActivity", activity);
+      if (this.voiceDataEnabled && this.listenerCount("voiceData") > 0) {
+        this.emit("voiceData", { ...activity, data: Buffer.from(voice.data) } satisfies TS3VoiceData);
+      }
     });
 
     this.client.on("disconnected", (err) => {
@@ -475,6 +484,10 @@ export class TS3Client extends EventEmitter {
 
   getClientId(): number {
     return this.clientId;
+  }
+
+  setVoiceDataEnabled(enabled: boolean): void {
+    this.voiceDataEnabled = enabled;
   }
 
   /** Actual endpoint selected by the SDK's SRV/TSDNS discovery and DNS lookup. */

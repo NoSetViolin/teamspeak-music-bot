@@ -631,6 +631,8 @@ describe("bot router /settings guest-mode gating + persistence", () => {
     expect(res.status).toBe(200);
     expect(res.body.guestMode).toBeDefined();
     expect(res.body.guestMode.enabled).toBe(false);
+    expect(res.body.voiceRequest.enabled).toBe(false);
+    expect(typeof res.body.voiceRequest.modelsReady).toBe("boolean");
   });
 
   it("POST /settings persists a guestMode block", async () => {

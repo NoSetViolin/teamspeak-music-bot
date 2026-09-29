@@ -100,8 +100,9 @@ fi
 sudo mkdir -p "$INSTALL_DIR"
 # Replace build output wholesale so files removed upstream don't linger.
 # data/ (config, database, cookies) is never touched.
-sudo rm -rf "$INSTALL_DIR/dist" "$INSTALL_DIR/node_modules" "$INSTALL_DIR/web/dist"
+sudo rm -rf "$INSTALL_DIR/dist" "$INSTALL_DIR/node_modules" "$INSTALL_DIR/web/dist" "$INSTALL_DIR/assets"
 sudo cp -r "$PROJECT_DIR/dist" "$INSTALL_DIR/"
+sudo cp -r "$PROJECT_DIR/assets" "$INSTALL_DIR/"
 sudo cp -r "$PROJECT_DIR/node_modules" "$INSTALL_DIR/"
 sudo cp "$PROJECT_DIR/package.json" "$INSTALL_DIR/"
 # Copy web frontend if built

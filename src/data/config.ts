@@ -60,6 +60,10 @@ export interface VoiceDuckingConfig {
   volumePercent: number;
 }
 
+export interface VoiceRequestConfig {
+  enabled: boolean;
+}
+
 /**
  * Providers gated by `enabledProviders`. Not listed here:
  *  - "local"   → governed by the existing `localAudioEnabled` flag
@@ -121,6 +125,8 @@ export interface BotConfig {
   autoPauseOnEmpty: boolean;
   /** Lower music volume while voice from another client is being received. */
   voiceDucking: VoiceDuckingConfig;
+  /** Local TeamSpeak voice wake + one-song requests; opt-in. */
+  voiceRequest: VoiceRequestConfig;
   idleTimeoutMinutes: number;
   /** Enable uploading and playback of server-stored local audio files. */
   localAudioEnabled: boolean;
@@ -188,6 +194,7 @@ export function getDefaultConfig(): BotConfig {
       enabled: false,
       volumePercent: 30,
     },
+    voiceRequest: { enabled: false },
     idleTimeoutMinutes: 0,
     localAudioEnabled: true,
     savedQueuesEnabled: false,
@@ -419,6 +426,9 @@ export function loadConfig(path: string): BotConfig {
           ? rawVolumePercent
           : defaults.voiceDucking.volumePercent,
     };
+    const voiceRequest: VoiceRequestConfig = {
+      enabled: partial.voiceRequest?.enabled === true,
+    };
 
     // defaultPlatform → an explicit operator default (issue #126). Keep it only
     // when it names a KNOWN gateable provider that is ALSO currently enabled;
@@ -458,6 +468,7 @@ export function loadConfig(path: string): BotConfig {
       savedQueuesEnabled,
       playKeepsQueue,
       voiceDucking,
+      voiceRequest,
       defaultPlatform: defaultPlatformPref,
     };
   }

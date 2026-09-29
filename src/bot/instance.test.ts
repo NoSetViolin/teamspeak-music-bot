@@ -133,10 +133,14 @@ describe("BotInstance voice-ducking lifecycle integration", () => {
     return {
       disconnectEmitted: false,
       connected: false,
+      voiceClientNames: new Map(),
       tsClient: {
         connect: vi.fn(() => connectPromise),
         getResolvedVoiceEndpoint: vi.fn(() => ({ host: "203.0.113.20", port: 12000 })),
+        setVoiceDataEnabled: vi.fn(),
       },
+      config: { voiceRequest: { enabled: false } },
+      voiceRequest: { setEnabled: vi.fn() },
       configuredVoiceServerScope: {
         host: "voice-alias.example.com",
         voicePort: 9987,
@@ -203,11 +207,14 @@ describe("BotInstance voice-ducking lifecycle integration", () => {
     );
     managedVoiceClients.register(voiceServerScope, 22, {}, "fallback-bot-uid=");
     const handleVoiceActivity = vi.fn();
+    const receiveVoice = vi.fn();
     const ctx = {
       tsClient,
       connected: true,
+      config: { voiceRequest: { enabled: true } },
       managedVoiceClients,
       voiceServerScope,
+      voiceRequest: { receive: receiveVoice },
       voiceDucking: {
         handleVoiceActivity,
         removeSpeaker: vi.fn(),
@@ -232,6 +239,12 @@ describe("BotInstance voice-ducking lifecycle integration", () => {
 
     expect(handleVoiceActivity).toHaveBeenCalledOnce();
     expect(handleVoiceActivity).toHaveBeenCalledWith(21);
+    for (const clientId of [20, 22, 21]) {
+      tsClient.emit("voiceData", { clientId, codec: 4, data: Buffer.from([1]),
+        clientUid: clientId === 20 ? "managed-bot-uid=" : clientId === 21 ? "human-uid=" : undefined });
+    }
+    expect(receiveVoice).toHaveBeenCalledOnce();
+    expect(receiveVoice.mock.calls[0][0].clientId).toBe(21);
   });
 
   it("keeps a disconnecting bot registered during the in-flight packet grace", () => {
@@ -1655,5 +1668,25 @@ describe("cmdPlaylist with a playlist link (#160)", () => {
     const ctx = makeCtx();
     await cmdPlaylist.call(ctx, cmd("2829883282"));
     expect(ctx.providers.netease.getPlaylistSongs).toHaveBeenCalledWith("2829883282");
+  });
+});
+
+describe("voice transport commands", () => {
+  it("routes pause and resume through the existing command handler", async () => {
+    const executeCommand = vi.fn().mockResolvedValue("Paused");
+    const sendVoiceRequestMessage = vi.fn();
+    const ctx = {
+      connected: true,
+      config: { voiceRequest: { enabled: true } },
+      voiceClientNames: new Map([[42, "listener"]]),
+      executeCommand,
+      sendVoiceRequestMessage,
+    } as any;
+    const handle = (BotInstance.prototype as any).handleVoicePlayRequest;
+    await handle.call(ctx, 42, "暂停");
+    await handle.call(ctx, 42, "继续");
+    expect(executeCommand.mock.calls.map(([command]) => command.name)).toEqual(["pause", "resume"]);
+    expect(executeCommand.mock.calls[0][2]).toBe("listener");
+    expect(sendVoiceRequestMessage).toHaveBeenCalledWith("🎤 Paused");
   });
 });

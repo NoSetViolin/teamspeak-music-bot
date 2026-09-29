@@ -793,6 +793,22 @@
         />
       </label>
 
+      <label class="profile-toggle behavior-toggle">
+        <div class="profile-toggle-text">
+          <div class="profile-toggle-label">频道语音点歌</div>
+          <div class="profile-toggle-hint">说“布鲁斯 布鲁斯”，听到提示音后说“我要听／放一首／播放／点歌＋歌名”，或说“暂停”“继续”。离线识别；默认关闭。</div>
+          <div v-if="!voiceRequestModelsReady" class="profile-toggle-hint">模型未安装：在服务端运行 npm run setup:voice 后刷新页面。</div>
+          <div v-if="voiceRequestMessage" class="profile-toggle-hint" role="status">{{ voiceRequestMessage }}</div>
+        </div>
+        <input
+          v-model="voiceRequestEnabled"
+          type="checkbox"
+          class="profile-toggle-switch"
+          :disabled="voiceRequestSaving || (!voiceRequestModelsReady && !voiceRequestEnabled)"
+          @change="saveVoiceRequest"
+        />
+      </label>
+
       <div class="setting-row voice-ducking-volume">
         <div class="setting-label">
           <Icon icon="mdi:volume-minus" class="setting-icon" />
@@ -1663,6 +1679,10 @@ const idleTimeout = ref(0);
 const autoPauseOnEmpty = ref(false);
 // Voice ducking defaults OFF and retains 30% of the configured player volume.
 const voiceDuckingEnabled = ref(false);
+const voiceRequestEnabled = ref(false);
+const voiceRequestModelsReady = ref(false);
+const voiceRequestSaving = ref(false);
+const voiceRequestMessage = ref('');
 const voiceDuckingVolumePercent = ref(30);
 const voiceDuckingLoaded = ref(false);
 const voiceDuckingSaving = ref(false);
@@ -1707,6 +1727,8 @@ async function loadIdleTimeout() {
     const res = await axios.get('/api/bot/settings');
     idleTimeout.value = res.data.idleTimeoutMinutes ?? 0;
     autoPauseOnEmpty.value = res.data.autoPauseOnEmpty ?? false;
+    voiceRequestEnabled.value = res.data.voiceRequest?.enabled === true;
+    voiceRequestModelsReady.value = res.data.voiceRequest?.modelsReady === true;
     // A later save owns the state. Do not let an older GET response overwrite
     // it if this loader is ever re-entered while a POST is in flight.
     if (voiceDuckingLoadRevision === voiceDuckingRequestRevision) {
@@ -1769,6 +1791,23 @@ async function saveVoiceDucking() {
     voiceDuckingMessage.value = '保存失败，请稍后重试';
   } finally {
     voiceDuckingSaving.value = false;
+  }
+}
+
+async function saveVoiceRequest() {
+  if (voiceRequestSaving.value) return;
+  voiceRequestSaving.value = true;
+  voiceRequestMessage.value = '';
+  const submitted = voiceRequestEnabled.value;
+  try {
+    const res = await axios.post('/api/bot/settings', { voiceRequest: { enabled: submitted } });
+    voiceRequestEnabled.value = res.data.voiceRequest?.enabled === true;
+    voiceRequestModelsReady.value = res.data.voiceRequest?.modelsReady === true;
+  } catch {
+    voiceRequestEnabled.value = !submitted;
+    voiceRequestMessage.value = '保存失败，请确认服务端已安装语音模型';
+  } finally {
+    voiceRequestSaving.value = false;
   }
 }
 

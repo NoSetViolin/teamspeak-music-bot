@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { buildFfmpegArgs, shouldUsePowerShellDownload, cleanupTempDir, shouldEndOnStall, volumeToFactor, AudioPlayer } from "./player.js";
+import { createOpusEncoder } from "./encoder.js";
 import type { Logger } from "../logger.js";
 
 function getHeadersArg(args: string[]): string {
@@ -11,6 +12,33 @@ function getHeadersArg(args: string[]): string {
   if (idx === -1) return "";
   return args[idx + 1] ?? "";
 }
+
+describe("wake cue", () => {
+  it("sends audible Opus frames while the player is idle", () => {
+    vi.useFakeTimers();
+    try {
+      const player = new AudioPlayer({} as Logger);
+      const frames: Buffer[] = [];
+      player.on("frame", (frame: Buffer) => frames.push(frame));
+      player.playWakeCue();
+      vi.advanceTimersByTime(1_300);
+      expect(frames).toHaveLength(64);
+      const decoder = createOpusEncoder();
+      const decoded = frames.map((frame) => decoder.decode(frame));
+      expect(decoded.some((pcm) => pcm.some((byte) => byte !== 0))).toBe(true);
+      expect(decoded.some((pcm) => {
+        for (let i = 0; i < pcm.length; i += 4) {
+          if (pcm.readInt16LE(i) !== pcm.readInt16LE(i + 2)) return true;
+        }
+        return false;
+      })).toBe(true);
+      expect(player.getState()).toBe("idle");
+      player.clearWakeCue();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
 
 describe("buildFfmpegArgs", () => {
   it("includes browser User-Agent and Referer for Netease CDN URLs", () => {
