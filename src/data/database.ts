@@ -210,6 +210,9 @@ function migrateSchema(db: Database.Database): void {
   if (!userColNames.includes("role")) {
     db.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'admin'");
   }
+  if (!userColNames.includes("accentColor")) {
+    db.exec("ALTER TABLE users ADD COLUMN accentColor TEXT NOT NULL DEFAULT '#335eea'");
+  }
 
   const historyColumns = db.prepare("PRAGMA table_info(play_history)").all() as Array<{ name: string }>;
   const historyColNames = historyColumns.map((c) => c.name);
@@ -271,6 +274,18 @@ function initTables(db: Database.Database): void {
 
     CREATE INDEX IF NOT EXISTS idx_sessions_userId ON sessions(userId);
     CREATE INDEX IF NOT EXISTS idx_sessions_expiresAt ON sessions(expiresAt);
+
+    CREATE TABLE IF NOT EXISTS api_keys (
+      id TEXT PRIMARY KEY,
+      userId TEXT NOT NULL,
+      name TEXT NOT NULL,
+      keyHash TEXT NOT NULL UNIQUE,
+      keyPrefix TEXT NOT NULL,
+      createdAt INTEGER NOT NULL,
+      lastUsedAt INTEGER,
+      FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE
+    );
+    CREATE INDEX IF NOT EXISTS idx_api_keys_userId ON api_keys(userId);
 
     CREATE TABLE IF NOT EXISTS user_audit (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

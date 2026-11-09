@@ -2,6 +2,8 @@ import { defineStore } from 'pinia';
 import axios from 'axios';
 import { resolveScopedBot } from './scope.js';
 import { useSession } from '../composables/useSession.js';
+import { DEFAULT_ACCENT, normalizeAccent, readGuestAccent, saveGuestAccent } from '../styles/accent.js';
+import { applyDocumentTheme, observeSystemTheme, readThemePreference, resolveTheme, type ThemePreference } from '../styles/theme.js';
 
 export interface Song {
   id: string;
@@ -126,7 +128,9 @@ export const usePlayerStore = defineStore('player', {
     queues: {} as Record<string, Song[]>,
     /** Per-bot timing state keyed by botId */
     timings: {} as Record<string, TimingState>,
-    theme: 'dark' as 'dark' | 'light',
+    themePreference: readThemePreference(),
+    theme: resolveTheme(readThemePreference()),
+    accentColor: DEFAULT_ACCENT,
 
     // Which sources the server has enabled (GET /api/music/providers) and the
     // configured default. Empty until fetched — sections stay hidden briefly.
@@ -336,14 +340,39 @@ export const usePlayerStore = defineStore('player', {
       this.queues[botId] = queue;
     },
 
-    toggleTheme() {
-      this.theme = this.theme === 'dark' ? 'light' : 'dark';
-      localStorage.setItem('theme', this.theme);
+    setThemePreference(preference: ThemePreference) {
+      this.themePreference = preference;
+      try { localStorage.setItem('theme', preference); } catch { /* Keep the selection for this session if storage is unavailable. */ }
+      this.theme = resolveTheme(preference);
+      applyDocumentTheme(this.theme);
     },
 
     loadTheme() {
-      const saved = localStorage.getItem('theme') as 'dark' | 'light' | null;
-      if (saved) this.theme = saved;
+      this.themePreference = readThemePreference();
+      this.theme = resolveTheme(this.themePreference);
+      applyDocumentTheme(this.theme);
+      return observeSystemTheme((dark) => {
+        if (this.themePreference !== 'system') return;
+        this.theme = resolveTheme('system', dark);
+        applyDocumentTheme(this.theme);
+      });
+    },
+
+    setAccentColor(value: string) {
+      const color = normalizeAccent(value);
+      if (!color) return;
+      this.accentColor = color;
+    },
+
+    saveGuestAccentColor() {
+      saveGuestAccent(this.accentColor);
+    },
+
+    loadAccentColor(value?: string | null) {
+      const session = useSession();
+      this.accentColor = !session.currentUser.value || session.isGuest.value
+        ? readGuestAccent()
+        : normalizeAccent(value ?? '') ?? DEFAULT_ACCENT;
     },
 
     async startBotInstance(id: string) {
@@ -580,6 +609,37 @@ export const usePlayerStore = defineStore('player', {
         this._syncAfterAction();
       } catch (e: any) {
         this.notify(e?.response?.status === 403 ? '没有权限播放整个专辑' : '播放专辑失败', 'error');
+      }
+    },
+
+    /**
+     * Queue an artist's songs. The server always loads the singer's FULL
+     * catalogue (never just the hot 50), which costs it a few upstream round
+     * trips, so the caller gets a "loading" notice first.
+     */
+    async playArtist(artistId: string, platform = 'netease') {
+      if (!this.activeBotId) return;
+      this.notify('正在载入该歌手的全部歌曲…', 'info');
+      try {
+        const res = await axios.post(
+          `/api/player/${this.activeBotId}/play-artist`,
+          { artistId, platform },
+        );
+        if (res.data?.message) {
+          this.notify(res.data.message, res.data.ok === false ? 'error' : 'info');
+        }
+        this._setTiming(this.activeBotId, { serverElapsed: 0 });
+        this._syncAfterAction();
+      } catch (e: any) {
+        const status = e?.response?.status;
+        this.notify(
+          status === 403
+            ? '没有权限播放整个歌手'
+            : status === 501
+              ? '该音源不支持播放歌手歌曲'
+              : '播放歌手失败',
+          'error',
+        );
       }
     },
 

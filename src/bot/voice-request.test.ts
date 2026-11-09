@@ -42,7 +42,7 @@ it("refreshes an installed keyword file with the new wake phrase", () => {
     writeFileSync(file, "old keyword\n", "utf8");
     ensureVoiceKeyword(root);
     expect(WAKE_PHRASE).toBe("布鲁斯布鲁斯");
-    expect(readFileSync(file, "utf8")).toBe("b ù l ǔ s ī b ù l ǔ s ī :2.0 #0.5 @布鲁斯布鲁斯\n");
+    expect(readFileSync(file, "utf8")).toBe("b ù l ǔ s ī b ù l ǔ s ī :1.2 #0.5 @布鲁斯布鲁斯\n");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -349,6 +349,14 @@ sudo systemctl start tsmusicbot
 4. （可选）在 **设置 → Jellyfin 音乐库** 连接自建 Jellyfin 服务器并打开「启用 Jellyfin 音源」（安装向导第 3 步保存连接时会自动启用；详见 [可选：Jellyfin 音源](#可选jellyfin-音源)）
 5. 在 **设置 → 用户管理**（仅管理员可见）按需添加成员。成员默认可控制播放但无法管理其他用户；管理员还可为每个成员单独配置**能力**（播放控制 / 队列 / 机器人管理 / 平台登录 / 音质）和**可操作的机器人白名单**，未授权的机器人对该成员不可见、不可控
 
+### QQ 音乐自动续期
+
+QQ 音源启用时，`QQ_MUSIC_MANAGED_SESSION` 默认为 `1`。在 **设置 → 音乐账号 → QQ 音乐** 用手机 QQ 扫码授权一次后，机器人每 24 小时自动续期，遇到有效期更短的凭据会在到期前提前续期。凭据和上次成功续期时间保存在数据目录的 `cookies/qq-session.json`，重启后继续按原时间安排续期。
+
+已有 `cookies/qq.json` 可继续播放，扫码授权后才会获得续期所需的凭据。手动导入 Cookie 会替换当前登录并取消该账号的自动续期。设置页会显示上次成功续期时间、下次续期时间、重试状态或重新扫码提示。具备平台登录权限的用户也可以调用 `POST /api/auth/qq/refresh` 手动尝试续期。
+
+设置 `QQ_MUSIC_MANAGED_SESSION=0` 并重启可关闭自动续期并使用原来的 `qq.json`。
+
 ### WebUI 页面说明
 
 | 页面 | 功能 |
@@ -409,7 +417,7 @@ sudo systemctl start tsmusicbot
 
 ### 频道语音点歌（离线识别）
 
-管理员先在机器人所在机器运行 `npm run setup:voice` 下载离线唤醒词、语音活动检测和中文识别模型（约 200 MB 下载，模型保存在 `data/voice-models/`）。然后在 WebUI「设置 → 机器人行为」启用「频道语音点歌」；默认关闭。Docker 部署时可在容器内运行同一命令，模型位于持久化的 `data/` 卷。
+管理员先在机器人所在机器运行 `npm run setup:voice` 下载离线唤醒词、语音活动检测和中文识别模型（约 200 MB 下载，模型保存在 `data/voice-models/`）。然后在 WebUI「设置 → 播放与音质 → 行为设置」启用「频道语音点歌」；默认关闭。Docker 部署时可在容器内运行同一命令，模型位于持久化的 `data/` 卷。
 
 在机器人所在频道说「布鲁斯 布鲁斯」，听到短提示音后说「我要听 晴天」「放一首 晴天」「播放 晴天」或「点歌 周杰伦的晴天」；也可以说「暂停」「继续」「上一首」或「下一首」控制播放。每次唤醒只接受唤醒者随后的一句指令。点歌按现有 `!play` 规则立即播放，受默认音源和「直接播放单曲时不清空队列」设置影响；播放控制沿用现有的 `!pause`、`!resume`、`!prev` 和 `!next` 行为。没有听清或执行失败时会在频道发送文字反馈。识别在本机运行；搜索和获取歌曲仍需要对应音源的网络服务。歌曲名识别及误唤醒情况应在实际频道中调试。
 
@@ -469,6 +477,52 @@ sudo systemctl start tsmusicbot
 | **音质**（各平台，WebUI 设置页 / REST `/quality`） | 全局（各平台各自记录） | `data/config.json` 的 `audioQuality` |
 
 聊天命令、WebUI、REST API 三种入口的改动都会被持久化。播放队列、当前歌曲、进度、`!fm` / `!artist` 等临时播放状态仍为一次性状态，重启后不保留（`!fm` / `!artist` 内部临时切换的随机 / 循环也**不会**覆盖你用 `!mode` 显式保存的偏好）。
+
+## REST API（API Key）
+
+除浏览器 session 登录外，REST API 还支持用 **API Key** 调用，便于脚本、Home Assistant 等外部集成。
+
+### 创建 Key
+
+登录 WebUI → 设置页 → 「API 密钥」→ 输入名称 → 生成。明文**只在创建时显示一次**（形如 `tsmb_xxxxx…`），之后只能看到前缀；可随时在设置页吊销。Key 的权限与所属账户一致：管理员拥有全部权限，成员只能操作被授权的机器人、使用被授予的能力（播放控制 / 队列管理等）。每位用户最多创建 20 个 Key。
+
+### 调用方式
+
+两种请求头任选其一：
+
+```
+Authorization: Bearer tsmb_xxxxxxxxxxxx
+X-API-Key: tsmb_xxxxxxxxxxxx
+```
+
+> 修改类请求（POST/PUT/DELETE）无需 CSRF Origin 头；WebSocket 推送（`/ws`）暂不支持 API Key，仅限浏览器 session。
+
+### 常用端点示例
+
+```bash
+# 机器人列表（拿到 botId）
+curl -H "Authorization: Bearer $KEY" http://127.0.0.1:3000/api/bot
+
+# 当前队列 + 播放状态
+curl -H "Authorization: Bearer $KEY" http://127.0.0.1:3000/api/player/<botId>/queue
+
+# 点歌（搜索文本 + 平台：netease/qq/bilibili/youtube/kugou/jellyfin/local）
+curl -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"query":"周杰伦 晴天","platform":"netease"}' \
+  http://127.0.0.1:3000/api/player/<botId>/play
+
+# 搜索歌曲（拿 song id / song 对象）
+curl -H "Authorization: Bearer $KEY" \
+  "http://127.0.0.1:3000/api/music/search?q=晴天&platform=netease"
+
+# 播放控制
+curl -X POST -H "X-API-Key: $KEY" http://127.0.0.1:3000/api/player/<botId>/pause
+curl -X POST -H "X-API-Key: $KEY" http://127.0.0.1:3000/api/player/<botId>/next
+curl -X POST -H "X-API-Key: $KEY" -H "Content-Type: application/json" \
+  -d '{"volume":50}' http://127.0.0.1:3000/api/player/<botId>/volume
+```
+
+全部端点、参数与返回值见 **[docs/API.md](docs/API.md)**。认证失败返回 `401 {"error":"invalid api key"}`，越权返回 `403`。
 
 ## 项目架构
 
@@ -915,7 +969,52 @@ A：本项目内置 `/login` 限流（每 IP 每分钟 5 次），但生产部�
 
 > 完整历史请查看 [git log](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/commits/main) 或 [Releases](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/releases)。这里只列出重要变更和面向用户的破坏性改动。
 
-### 最新版本 — v1.14.0：歌单链接直接播放 / 每人绑定自己的网易云私人FM / B站分P
+### 最新版本 — v1.15.2：长视频续播与语音发送故障处理
+
+- 修复播放停滞的误判：一帧音频成功发送后，即使缓冲恰好被读空，也会重置断流计数。真实断流仍保留超时检测。
+- B站 CDN 按实际域名识别，补齐 `szbdyd.com` 等回退节点的请求头和断点定位，避免续播时从头下载、解码长视频。
+- B站提前结束后，获取新播放地址失败会在 1 秒、2 秒后重试，单次恢复最多查询 3 次；期间的切歌、停止、暂停和断开连接均会保留用户意图。诊断日志不记录原始地址或凭据。
+- 语音发送异常不再被静默忽略：短暂失败后可继续发送；连续失败 2 秒后暂停，保留曲目与进度。处理网络或连接问题后可手动继续播放，持续故障日志有输出上限。
+- 开启“频道无人时自动暂停”后，过期的频道人数查询和旧连接的空闲定时器不会再错误暂停或断开当前播放。
+- 修复重连期间旧频道查询和 DNS 结果覆盖新连接的竞态，避免已经连接的机器人被旧请求移回频道或记录错误的服务器地址。
+
+无配置或数据库迁移。此版本修复了已复现的故障路径；[#161](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/issues/161) 中新分支“67 分钟视频播到 37 分钟停止”的现场原因仍缺少停止时日志，尚未确认。
+
+### v1.15.1：长视频播放阻塞与音乐 API 日志隐私修复
+
+- 持续读取 FFmpeg 的 stderr，并关闭周期性进度输出，避免错误输出管道写满后卡住音频解码。直接 URL 播放和 Windows 临时文件播放均已处理。
+- FFmpeg 异常退出和播放停滞日志增加限长、脱敏的诊断摘要；移除 URL 查询参数、用户凭据和认证头，PowerShell 下载失败日志采用同样的处理。
+- 内置网易云 / QQ 音乐 API 在独立子进程运行，隔离依赖直接输出的原始请求和响应日志，避免其中的 Cookie 等凭据进入机器人控制台日志。仍保留服务启动和退出的安全诊断；独立部署或已占用端口的外部 API 需自行管理日志。
+
+无配置或数据库迁移。此补丁修复了已复现的管道阻塞；[#161](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/issues/161) 中“67 分钟视频播到 37 分钟停止”的现场原因仍缺少停止时日志，尚未确认。
+
+### v1.15.0：歌手页面 / REST API / TS6 Profile 与 B站续播修复
+
+**歌手搜索与页面（[PR #175](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/pull/175)，感谢 [@zzstar101](https://github.com/zzstar101)）**
+
+- 网易云 / QQ 音乐支持搜索歌手、查看歌手介绍、热门歌曲和专辑，并播放或随机播放歌手曲目（最多 500 首）。搜索历史按音源保存在当前浏览器。
+- 歌手播放与单曲播放共用播放锁，避免同时点播时实际歌曲与队列不一致。QQ 曲目目录在上游查询失败时不缓存降级结果，不再因 50 张专辑的限制提前截断歌曲。
+- 歌手页面的迟到请求不会覆盖新页面；访客的随机播放按钮同时遵守歌手播放与模式切换权限。
+
+**REST API（[PR #173](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/pull/173)，感谢 [@senlinjun](https://github.com/senlinjun)）**
+
+- 在设置页创建、查看和撤销 API Key；脚本可用 Bearer 或 X-API-Key 调用已有 REST 端点，权限和可控机器人范围继承所属用户。完整说明见 [REST API 文档](docs/API.md)。
+- 修复管理员撤销他人 Key 时的审计对象。修改或重置密码会撤销该用户的全部 API Key，外部集成需要重新生成凭据。
+
+**TS6 Profile（[PR #174](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/pull/174)，感谢 [@razaxq](https://github.com/razaxq)）**
+
+- 昵称和 Away 状态通过真实音乐客户端更新，描述通过明确的客户端 ID 更新，避免修改 HTTP ServerQuery 客户端。
+- 频道描述写入和移动后的清理使用相同权限路径；重连后丢弃旧会话请求，权限不足时可靠降级。
+
+**B站长视频续播（[#161](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/issues/161)，[PR #170](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/pull/170)）**
+
+- 优先使用稳定 CDN 镜像；流提前结束时重新解析地址并从当前进度续播，连续无进展重试有次数限制。
+- 播放结束和恢复请求按播放会话校验，旧请求不会跳过新曲，也不会覆盖同一曲目的新一轮播放。
+- 恢复地址查询期间暂停会保留暂停状态；恢复播放不会重复发起查询，查询失败后仍可按重试上限继续恢复。
+
+数据库自动新增 API Key 表，保留已有用户和设置。自动化测试只收集源码，排除旧的编译测试副本。
+
+### v1.14.0：歌单链接直接播放 / 每人绑定自己的网易云私人FM / B站分P
 
 处理了 5 个社区反馈的 issue。**没有配置变化，升级无需任何操作**；数据库会自动新增一张表（存放用户自己绑定的网易云账号），原有数据不受影响。
 

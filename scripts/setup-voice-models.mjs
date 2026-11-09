@@ -50,5 +50,5 @@ if (!existsSync(vad)) {
 }
 // The bundled WenetSpeech KWS model uses partial pinyin tokens. This is
 // bù lǔ sī bù lǔ sī, with the original text returned on detection.
-writeFileSync(path.join(root, 'keywords.txt'), 'b ù l ǔ s ī b ù l ǔ s ī :2.0 #0.5 @布鲁斯布鲁斯\n', 'utf8');
+writeFileSync(path.join(root, 'keywords.txt'), 'b ù l ǔ s ī b ù l ǔ s ī :1.2 #0.5 @布鲁斯布鲁斯\n', 'utf8');
 console.log(`Voice models ready in ${root}`);

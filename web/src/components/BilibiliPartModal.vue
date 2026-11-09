@@ -207,7 +207,7 @@ function formatDuration(seconds: number): string {
 
     .part-badge {
       background: var(--color-primary);
-      color: white;
+      color: var(--color-on-primary);
     }
 
     .part-name {
@@ -254,7 +254,7 @@ function formatDuration(seconds: number): string {
 .btn-primary {
   padding: 10px 20px;
   background: var(--color-primary);
-  color: white;
+  color: var(--color-on-primary);
   border-radius: var(--radius-sm);
   font-size: 13px;
   font-weight: 600;
