@@ -75,6 +75,7 @@ export function createBotRouter(
       voiceDucking: config.voiceDucking,
       localAudioEnabled: config.localAudioEnabled,
       savedQueuesEnabled: config.savedQueuesEnabled,
+      perUserMusicAccounts: config.perUserMusicAccounts === true,
       playKeepsQueue: config.playKeepsQueue,
       // Silent re-resolve budget for a track whose URL came back empty.
       playUrlRetries: config.playUrlRetries ?? 0,
@@ -99,6 +100,7 @@ export function createBotRouter(
       guestMode,
       adminGroups,
       playUrlRetries,
+      perUserMusicAccounts,
     } = req.body;
 
     const hasIdle = idleTimeoutMinutes !== undefined;
@@ -122,6 +124,9 @@ export function createBotRouter(
       res.status(400).json({ error: "playUrlRetries must be an integer 0-5" });
       return;
     }
+    // Per-user music accounts: admin-only toggle (this route already requires
+    // bot.manage). Strictly boolean — anything else leaves the value alone.
+    const hasPerUserMusicAccounts = typeof perUserMusicAccounts === "boolean";
 
     const hasNeteaseRealIP = "neteaseRealIP" in req.body;
     const neteaseRealIP = typeof req.body.neteaseRealIP === "string"
@@ -137,6 +142,7 @@ export function createBotRouter(
     if (hasAutoPause) config.autoPauseOnEmpty = autoPauseOnEmpty;
     if (hasLocalAudioEnabled) config.localAudioEnabled = localAudioEnabled;
     if (hasPlayUrlRetries) config.playUrlRetries = playUrlRetries;
+    if (hasPerUserMusicAccounts) config.perUserMusicAccounts = perUserMusicAccounts;
 
     // Voice ducking is a partial settings block. Merge only known, strictly
     // valid fields so malformed JSON cannot replace the object or inject NaN /
@@ -311,6 +317,7 @@ export function createBotRouter(
       voiceDucking: config.voiceDucking,
       localAudioEnabled: config.localAudioEnabled,
       savedQueuesEnabled: config.savedQueuesEnabled,
+      perUserMusicAccounts: config.perUserMusicAccounts === true,
       playKeepsQueue: config.playKeepsQueue,
       // Silent re-resolve budget for a track whose URL came back empty.
       playUrlRetries: config.playUrlRetries ?? 0,

@@ -134,6 +134,16 @@ export interface BotConfig {
    */
   savedQueuesEnabled: boolean;
   /**
+   * Per-user music accounts (admin-controlled, default false). When on, a web
+   * user who linked their own platform account (Settings → 我的音乐账号) reads
+   * search results, playlists, daily recommendations and playback URLs from
+   * THAT account instead of the bot's shared login — so a member stops seeing
+   * the admin's library. When off (or when the user has no linked account, or
+   * the source has no per-account login) everything falls back to the shared
+   * login, which is exactly the pre-existing behaviour.
+   */
+  perUserMusicAccounts: boolean;
+  /**
    * When true, a single-song immediate !play (chat) / play-song (web) inserts
    * after the current track and jumps to it instead of clearing the queue, so
    * the rest of the queue survives and continues afterwards. Default false
@@ -220,6 +230,7 @@ export function getDefaultConfig(): BotConfig {
     idleTimeoutMinutes: 0,
     localAudioEnabled: true,
     savedQueuesEnabled: false,
+    perUserMusicAccounts: false,
     playKeepsQueue: false,
     // Two extra attempts: enough to ride out a transient NetEase hiccup without
     // making a genuinely unlicensed track feel stuck (~1s of backoff total).
@@ -427,6 +438,9 @@ export function loadConfig(path: string): BotConfig {
     // them (`"yes"`, `1`, `null` → false; only a literal `true` enables).
     const savedQueuesEnabled = partial.savedQueuesEnabled === true;
     const playKeepsQueue = partial.playKeepsQueue === true;
+    // Same strict-coercion rule: a legacy config without the key, or a
+    // hand-edited `"yes"`/`1`, must never turn account isolation on by accident.
+    const perUserMusicAccounts = partial.perUserMusicAccounts === true;
 
     // Play-URL retry budget. Anything non-numeric (legacy config, `"3"`,
     // `null`) falls back to the default instead of disabling the retry, because
@@ -512,6 +526,7 @@ export function loadConfig(path: string): BotConfig {
       audioQuality,
       enabledProviders,
       savedQueuesEnabled,
+      perUserMusicAccounts,
       playKeepsQueue,
       playUrlRetries,
       musicProxy,
