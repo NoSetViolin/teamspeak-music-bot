@@ -649,6 +649,23 @@ describe("NetEase — outbound proxy", () => {
     expect(seen[0].proxy).toBe("http://h:1");
   });
 
+  it("inherits the proxy when creating a personal account view", async () => {
+    const { p } = capture();
+    p.setProxy("http://h:1");
+    const personal = p.withCookie("MUSIC_U=personal");
+    const seen: Array<Record<string, unknown>> = [];
+    (personal as unknown as { api: { get: (url: string, config: any) => Promise<unknown> } }).api = {
+      get: async (_url, config) => {
+        seen.push({ ...config.params });
+        return { data: { data: [{ url: "https://example.com/song.mp3" }] } };
+      },
+    };
+
+    await personal.getSongUrl("1");
+
+    expect(seen[0]).toMatchObject({ cookie: "MUSIC_U=personal", proxy: "http://h:1" });
+  });
+
   it("treats a blank value as direct service", async () => {
     const { p, seen } = capture();
     p.setProxy("   ");

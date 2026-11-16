@@ -553,6 +553,7 @@ export class NeteaseProvider implements MusicProvider {
   withCookie(cookie: string): NeteaseProvider {
     const view = new NeteaseProvider(this.baseUrl, this.getRealIP);
     view.setQuality(this.quality);
+    view.setProxy(this.proxy);
     view.setCookie(cookie);
     return view;
   }
