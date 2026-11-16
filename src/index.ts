@@ -67,7 +67,7 @@ async function main() {
   );
   await apiServer.start();
 
-  const neteaseProvider = new NeteaseProvider(apiServer.getNeteaseBaseUrl());
+  const neteaseProvider = new NeteaseProvider(apiServer.getNeteaseBaseUrl(), () => config.neteaseRealIP);
   const bilibiliProvider = new BiliBiliProvider();
   const localProvider = new LocalMusicProvider(LOCAL_AUDIO_DIR);
   const kugouProvider = new KugouProvider();
