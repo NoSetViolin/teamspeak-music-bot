@@ -141,6 +141,7 @@ export class TS3Client extends EventEmitter {
   private readonly clientUid: string;
   private clientId = 0;
   private voiceDataEnabled = false;
+  private inboundVoicePackets = 0;
   private readonly visibleClientUids = new Map<number, string>();
   private readonly visibleClientUidReleaseTimers = new Map<
     number,
@@ -312,6 +313,13 @@ export class TS3Client extends EventEmitter {
         ...(clientUid ? { clientUid } : {}),
       };
       this.emit("voiceActivity", activity);
+      this.inboundVoicePackets++;
+      if (this.inboundVoicePackets === 1) {
+        this.logger.info(
+          { clientId: voice.clientId, codec: voice.codec, forwarded: this.voiceDataEnabled },
+          "Received first inbound TeamSpeak voice packet",
+        );
+      }
       if (this.voiceDataEnabled && this.listenerCount("voiceData") > 0) {
         this.emit("voiceData", { ...activity, data: Buffer.from(voice.data) } satisfies TS3VoiceData);
       }
@@ -371,6 +379,7 @@ export class TS3Client extends EventEmitter {
     await sdkClient.waitConnected();
     if (!isCurrent()) return;
     this.clientId = sdkClient.clientID();
+    this.inboundVoicePackets = 0;
     this.voiceFramesSent = 0;
     this.logger.info(
       { clientId: this.clientId, protocol: this.detectedProtocol },

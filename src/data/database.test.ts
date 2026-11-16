@@ -400,3 +400,58 @@ describe("user music cookies (#164)", () => {
     expect(botDb.getUserMusicCookie("u1", "netease")).toBeNull();
   });
 });
+
+describe("voiceprints", () => {
+  let botDb: BotDatabase;
+
+  beforeEach(() => {
+    botDb = createDatabase(":memory:");
+  });
+  afterEach(() => botDb.close());
+
+  it("stores multiple identities and replaces a user's enrollment", () => {
+    const scope = "server.example:9987";
+    botDb.saveVoiceprint({ scope, name: "Alice", clientUid: "uid-a", embedding: [0.1, 0.2] });
+    botDb.saveVoiceprint({ scope, name: "Bob", clientUid: "uid-b", embedding: [0.3, 0.4] });
+    botDb.saveVoiceprint({ scope, name: "Alice 2", clientUid: "uid-a", embedding: [0.5, 0.6] });
+
+    expect(botDb.listVoiceprints(scope).map((v) => v.name).sort()).toEqual(["Alice 2", "Bob"]);
+    expect(botDb.listVoiceprints(scope).find((v) => v.clientUid === "uid-a")?.embedding).toEqual([0.5, 0.6]);
+    expect(botDb.listVoiceprints("other.example:9987")).toEqual([]);
+  });
+
+  it("only lets the owner remove a voiceprint", () => {
+    const scope = "server.example:9987";
+    const saved = botDb.saveVoiceprint({ scope, name: "Alice", clientUid: "web:user-a:Alice", embedding: [0.1] });
+    expect(botDb.deleteVoiceprint(scope, "Alice", "uid-b")).toBe(false);
+    expect(botDb.deleteVoiceprintById(scope, saved.id, "web:user-b:")).toBe(false);
+    expect(botDb.deleteVoiceprintById(scope, saved.id, "web:user-a:")).toBe(true);
+    expect(botDb.listVoiceprints(scope)).toEqual([]);
+  });
+
+  it("loads legacy single samples and persists multiple samples across reopening", () => {
+    const directory = mkdtempSync(join(tmpdir(), "voiceprint-samples-"));
+    const file = join(directory, "voiceprints.db");
+    const store = createDatabase(file);
+    store.saveVoiceprint({ scope: "server", name: "Legacy", clientUid: "old", embedding: [1, 0] });
+    store.saveVoiceprint({ scope: "server", name: "Multi", clientUid: "new", embedding: [1, 0], embeddings: [[1, 0], [0.8, 0.2], [0.6, 0.4]] });
+    store.close();
+    const reopened = createDatabase(file);
+    try {
+      const records = reopened.listVoiceprints("server");
+      expect(records.find(record => record.name === "Legacy")?.embeddings).toEqual([[1, 0]]);
+      expect(records.find(record => record.name === "Multi")?.embeddings).toEqual([[1, 0], [0.8, 0.2], [0.6, 0.4]]);
+    } finally {
+      reopened.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects invalid samples without replacing an existing voiceprint", () => {
+    const input = { scope: "server", name: "Alice", clientUid: "alice", embedding: [1, 0] };
+    botDb.saveVoiceprint(input);
+    expect(() => botDb.saveVoiceprint({ ...input, embeddings: [[1, 0], [0.5]] })).toThrow();
+    expect(() => botDb.saveVoiceprint({ ...input, embeddings: [[1, 0], [NaN, 1]] })).toThrow();
+    expect(botDb.listVoiceprints("server")[0].embeddings).toEqual([[1, 0]]);
+  });
+});

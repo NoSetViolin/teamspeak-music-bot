@@ -1,4 +1,5 @@
 import Database from "better-sqlite3";
+import { randomUUID } from "node:crypto";
 import { CAPABILITIES, BOTS_ALL } from "./permissions.js";
 import { GUEST_USER_ID, GUEST_USERNAME } from "./users.js";
 import type { QueuedSong } from "../audio/queue.js";
@@ -40,6 +41,32 @@ export interface QueueStateRow {
   mode: string;
   isFmMode: boolean;
   fmPlatform: string;
+}
+
+/** A locally stored speaker embedding bound to a TeamSpeak identity. */
+export interface VoiceprintRecord {
+  id: string;
+  scope: string;
+  name: string;
+  clientUid: string;
+  embedding: number[];
+  embeddings?: number[][];
+  createdAt: number;
+}
+
+function parseVoiceprintVectors(raw: string): { embedding: number[]; embeddings: number[][] } | null {
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed) || parsed.length === 0) return null;
+    const vectors = Array.isArray(parsed[0]) ? parsed : [parsed];
+    if (vectors.length > 8 || vectors.some(vector =>
+      !Array.isArray(vector) || vector.length === 0 || vector.length > 4096 ||
+      vector.length !== vectors[0].length || vector.some(value => typeof value !== "number" || !Number.isFinite(value))
+    )) return null;
+    return { embedding: vectors[0], embeddings: vectors };
+  } catch {
+    return null;
+  }
 }
 
 export interface PlayHistoryEntry {
@@ -148,6 +175,10 @@ export interface BotDatabase {
   getUserMusicCookie(userId: string, platform: string): string | null;
   setUserMusicCookie(userId: string, platform: string, cookie: string): void;
   deleteUserMusicCookie(userId: string, platform: string): boolean;
+  listVoiceprints(scope: string): VoiceprintRecord[];
+  saveVoiceprint(input: Omit<VoiceprintRecord, "id" | "createdAt">): VoiceprintRecord;
+  deleteVoiceprint(scope: string, name: string, clientUid: string): boolean;
+  deleteVoiceprintById(scope: string, id: string, ownerPrefix: string): boolean;
   // Saved queues (Feature 1) — upsert by (ownerId, name), capped.
   saveQueue(ownerId: string, name: string, songs: StoredSong[]): SavedQueue;
   listSavedQueues(ownerId: string, includeShared: boolean): SavedQueueMeta[];
@@ -358,6 +389,17 @@ function initTables(db: Database.Database): void {
       PRIMARY KEY (userId, platform),
       FOREIGN KEY (userId) REFERENCES users(id) ON DELETE CASCADE
     );
+
+    CREATE TABLE IF NOT EXISTS voiceprints (
+      id        TEXT PRIMARY KEY,
+      scope     TEXT NOT NULL,
+      name      TEXT NOT NULL,
+      clientUid TEXT NOT NULL,
+      embedding TEXT NOT NULL,
+      createdAt INTEGER NOT NULL,
+      UNIQUE (scope, name),
+      UNIQUE (scope, clientUid)
+    );
   `);
 }
 
@@ -493,6 +535,25 @@ export function createDatabase(dbPath: string): BotDatabase {
   const deleteUserMusicCookieStmt = db.prepare(
     `DELETE FROM user_music_cookies WHERE userId = ? AND platform = ?`,
   );
+
+  const selectVoiceprints = db.prepare(`
+    SELECT id, scope, name, clientUid, embedding, createdAt
+    FROM voiceprints WHERE scope = ? ORDER BY createdAt ASC
+  `);
+  const deleteVoiceprintByName = db.prepare(
+    `DELETE FROM voiceprints WHERE scope = ? AND name = ? AND clientUid = ?`,
+  );
+  const deleteVoiceprintById = db.prepare(
+    `DELETE FROM voiceprints WHERE scope = ? AND id = ? AND clientUid LIKE ?`,
+  );
+  const upsertVoiceprint = db.prepare(`
+    INSERT INTO voiceprints (id, scope, name, clientUid, embedding, createdAt)
+    VALUES (@id, @scope, @name, @clientUid, @embedding, @createdAt)
+    ON CONFLICT(scope, clientUid) DO UPDATE SET
+      name = excluded.name,
+      embedding = excluded.embedding,
+      createdAt = excluded.createdAt
+  `);
 
   // A corrupt/hand-edited songs blob must never throw into a route or the
   // restore path — degrade to an empty list instead.
@@ -686,6 +747,59 @@ export function createDatabase(dbPath: string): BotDatabase {
 
     deleteUserMusicCookie(userId, platform) {
       return deleteUserMusicCookieStmt.run(userId, platform).changes > 0;
+    },
+
+    listVoiceprints(scope) {
+      const rows = selectVoiceprints.all(scope) as Array<{
+        id: string;
+        scope: string;
+        name: string;
+        clientUid: string;
+        embedding: string;
+        createdAt: number;
+      }>;
+      return rows.flatMap((row) => {
+        const vectors = parseVoiceprintVectors(row.embedding);
+        return vectors ? [{ ...row, ...vectors }] : [];
+      });
+    },
+
+    saveVoiceprint(input) {
+      if (!input.scope || !input.name || !input.clientUid || input.embedding.length === 0) {
+        throw new Error("Invalid voiceprint");
+      }
+      if (input.name.length > 32 || input.embedding.length > 4096) {
+        throw new Error("Voiceprint is too large");
+      }
+      if (input.embedding.some((v) => !Number.isFinite(v))) {
+        throw new Error("Invalid voiceprint embedding");
+      }
+      const encoded = JSON.stringify(input.embeddings ?? input.embedding);
+      if (!parseVoiceprintVectors(encoded)) throw new Error("Invalid voiceprint samples");
+      const record: VoiceprintRecord = {
+        id: randomUUID(),
+        ...input,
+        createdAt: Date.now(),
+      };
+      upsertVoiceprint.run({ ...record, embedding: encoded });
+      const row = (selectVoiceprints.all(record.scope) as Array<{
+        id: string;
+        scope: string;
+        name: string;
+        clientUid: string;
+        embedding: string;
+        createdAt: number;
+      }>).find((candidate) => candidate.clientUid === record.clientUid);
+      if (!row) throw new Error("Voiceprint was not saved");
+      return { ...row, ...parseVoiceprintVectors(row.embedding)! };
+    },
+
+    deleteVoiceprint(scope, name, clientUid) {
+      return deleteVoiceprintByName.run(scope, name, clientUid).changes > 0;
+    },
+
+    deleteVoiceprintById(scope, id, ownerPrefix) {
+      return deleteVoiceprintById.run(scope, id, `${ownerPrefix}%`).changes > 0;
     },
 
     saveQueue(ownerId, name, songs) {

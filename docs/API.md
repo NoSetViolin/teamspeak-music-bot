@@ -127,6 +127,10 @@ interface BotStatus {
 | PUT | `/api/bot/:id` | `bot.manage` + 机器人访问 | 更新连接配置 |
 | DELETE | `/api/bot/:id` | `bot.manage` + 机器人访问 | 删除机器人 |
 | POST | `/api/bot/:id/start` | `bot.manage` + 机器人访问 | 连接服务器 |
+| GET | `/api/bot/:id/voiceprints` | 机器人访问 | 当前服务器的声纹列表 |
+| POST | `/api/bot/:id/voiceprints/analyze` | `bot.manage` + 机器人访问 | 检查单段 `audioBase64`，返回转写、秒数和 RMS，供逐句学习预览 |
+| POST | `/api/bot/:id/voiceprints` | `bot.manage` + 机器人访问 | 提交 `name` 和 3～8 段 `audioSamplesBase64`，全部处理成功后保存多样本声纹。兼容单段 `audioBase64`。列表与保存响应包含 `sampleCount` |
+| DELETE | `/api/bot/:id/voiceprints/:voiceprintId` | `bot.manage` + 机器人访问 | 删除当前 WebUI 用户自己的声纹 |
 | POST | `/api/bot/:id/stop` | `bot.manage` + 机器人访问 | 断开连接 |
 | GET | `/api/bot/:id/config` | `bot.manage` + 机器人访问 | 保存的连接配置(不含 identity/TS6 key) |
 | GET / PUT / DELETE | `/api/bot/:id/avatar` | `bot.manage` + 机器人访问 | 自定义头像 |
@@ -161,6 +165,7 @@ interface BotStatus {
   "autoPauseOnEmpty": true,          // 频道无人自动暂停
   "localAudioEnabled": true,         // 本地音频
   "voiceDucking": { "enabled": true, "volumePercent": 20 },
+  "voiceRequest": { "enabled": true, "mode": "voiceprint" },
   "savedQueuesEnabled": true,
   "playKeepsQueue": false,           // !play 是否保留队列
   "adminGroups": [6],

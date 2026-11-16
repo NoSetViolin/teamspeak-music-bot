@@ -48,7 +48,15 @@ if (!existsSync(vad)) {
   console.log('Downloading silero_vad.onnx');
   await download(`${releases}/asr-models/silero_vad.onnx`, vad);
 }
+const speaker = path.join(root, '3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx');
+if (!existsSync(speaker)) {
+  console.log('Downloading speaker embedding model');
+  await download(
+    `${releases}/speaker-recongition-models/3dspeaker_speech_eres2net_base_sv_zh-cn_3dspeaker_16k.onnx`,
+    speaker,
+  );
+}
 // The bundled WenetSpeech KWS model uses partial pinyin tokens. This is
 // bù lǔ sī bù lǔ sī, with the original text returned on detection.
-writeFileSync(path.join(root, 'keywords.txt'), 'b ù l ǔ s ī b ù l ǔ s ī :1.2 #0.5 @布鲁斯布鲁斯\n', 'utf8');
+writeFileSync(path.join(root, 'keywords.txt'), 'b ù l ǔ s ī b ù l ǔ s ī :1.8 #0.15 @布鲁斯布鲁斯\n', 'utf8');
 console.log(`Voice models ready in ${root}`);

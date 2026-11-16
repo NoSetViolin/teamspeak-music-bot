@@ -2,13 +2,14 @@ import { Router } from "express";
 import type { BotManager } from "../../bot/manager.js";
 import type { BotConfig, GuestModeConfig, SpotifyConfig, JellyfinConfig, GateableProvider } from "../../data/config.js";
 import { saveConfig, GATEABLE_PROVIDERS } from "../../data/config.js";
-import { missingVoiceModels } from "../../bot/voice-models.js";
+import { missingVoiceModels, type VoiceWakeMode } from "../../bot/voice-models.js";
 import type { Logger } from "../../logger.js";
 import type { BotDatabase } from "../../data/database.js";
 import type { AvatarStore } from "../../data/avatars.js";
 import { requirePermission, requireBotAccess } from "../middleware/requirePermission.js";
 import { requireNotGuest } from "../middleware/requireNotGuest.js";
 import { GUEST_PERMISSION_FLAGS } from "../../data/permissions.js";
+import { createVoiceprintFromBrowserAudio } from "../../bot/voiceprint.js";
 
 export function createBotRouter(
   botManager: BotManager,
@@ -73,7 +74,7 @@ export function createBotRouter(
       idleTimeoutMinutes: config.idleTimeoutMinutes ?? 0,
       autoPauseOnEmpty: config.autoPauseOnEmpty,
       voiceDucking: config.voiceDucking,
-      voiceRequest: { ...config.voiceRequest, modelsReady: missingVoiceModels().length === 0 },
+      voiceRequest: { ...config.voiceRequest, modelsReady: missingVoiceModels(config.voiceRequest.mode).length === 0 },
       localAudioEnabled: config.localAudioEnabled,
       savedQueuesEnabled: config.savedQueuesEnabled,
       playKeepsQueue: config.playKeepsQueue,
@@ -134,12 +135,15 @@ export function createBotRouter(
     }
 
     const hasVoiceRequest = voiceRequest !== null && typeof voiceRequest === "object" && !Array.isArray(voiceRequest);
+    const requestedVoiceMode: VoiceWakeMode = voiceRequest?.mode === "keyword" ? "keyword" : "voiceprint";
+    const hasVoiceMode = hasVoiceRequest && (voiceRequest.mode === "keyword" || voiceRequest.mode === "voiceprint");
     if (hasVoiceRequest && typeof voiceRequest.enabled === "boolean") {
-      if (voiceRequest.enabled && missingVoiceModels().length > 0) {
+      if (voiceRequest.enabled && missingVoiceModels(requestedVoiceMode).length > 0) {
         res.status(400).json({ error: "Voice models are missing. Run npm run setup:voice first." });
         return;
       }
       config.voiceRequest.enabled = voiceRequest.enabled;
+      if (hasVoiceMode) config.voiceRequest.mode = requestedVoiceMode;
     }
 
     // Saved-queues + play-keeps-queue toggles (default off). Both read live from
@@ -286,14 +290,14 @@ export function createBotRouter(
       if (hasIdle) bot.updateIdleTimeout(config.idleTimeoutMinutes);
       if (hasAutoPause) bot.updateAutoPause(config.autoPauseOnEmpty);
       if (hasVoiceDucking) bot.updateVoiceDucking(config.voiceDucking);
-      if (hasVoiceRequest) bot.updateVoiceRequest(config.voiceRequest.enabled);
+      if (hasVoiceRequest) bot.updateVoiceRequest(config.voiceRequest.enabled, config.voiceRequest.mode);
     }
 
     res.json({
       idleTimeoutMinutes: config.idleTimeoutMinutes ?? 0,
       autoPauseOnEmpty: config.autoPauseOnEmpty,
       voiceDucking: config.voiceDucking,
-      voiceRequest: { ...config.voiceRequest, modelsReady: missingVoiceModels().length === 0 },
+      voiceRequest: { ...config.voiceRequest, modelsReady: missingVoiceModels(config.voiceRequest.mode).length === 0 },
       localAudioEnabled: config.localAudioEnabled,
       savedQueuesEnabled: config.savedQueuesEnabled,
       playKeepsQueue: config.playKeepsQueue,
@@ -304,6 +308,112 @@ export function createBotRouter(
       enabledProviders: config.enabledProviders,
       defaultPlatform: config.defaultPlatform,
     });
+  });
+
+  router.get("/:id/voiceprints", requireBotAccess("id"), (req, res) => {
+    const bot = botManager.getBot(req.params.id);
+    if (!bot) {
+      res.status(404).json({ error: "Bot not found" });
+      return;
+    }
+    const ownerPrefix = `web:${req.user!.id}:`;
+    const voiceprints = botDb.listVoiceprints(bot.getVoiceprintScope()).map((record) => ({
+      id: record.id,
+      name: record.name,
+      createdAt: record.createdAt,
+      sampleCount: record.embeddings?.length ?? 1,
+      ownedByCurrentUser: record.clientUid.startsWith(ownerPrefix),
+    }));
+    res.json({ voiceprints });
+  });
+
+  router.post("/:id/voiceprints/analyze", requirePermission("bot.manage"), requireBotAccess("id"), async (req, res) => {
+    if (!botManager.getBot(req.params.id)) {
+      res.status(404).json({ error: "Bot not found" });
+      return;
+    }
+    const encoded = req.body?.audioBase64;
+    if (typeof encoded !== "string" || encoded.length > 470_000 || !encoded) {
+      res.status(400).json({ error: "请上传一段有效录音" });
+      return;
+    }
+    if (missingVoiceModels("voiceprint").length > 0) {
+      res.status(400).json({ error: "Voice models are missing. Run npm run setup:voice first." });
+      return;
+    }
+    try {
+      const result = await createVoiceprintFromBrowserAudio(Buffer.from(encoded.replace(/^data:[^,]+,/, ""), "base64"), false);
+      res.json({ transcript: result.transcript, duration: result.duration, rms: result.rms });
+    } catch (err) {
+      logger.warn({ err }, "Voiceprint sample analysis failed");
+      res.status(400).json({ error: err instanceof Error ? err.message : "录音分析失败，请重录这一句" });
+    }
+  });
+
+  router.post("/:id/voiceprints", requirePermission("bot.manage"), requireBotAccess("id"), async (req, res) => {
+    const bot = botManager.getBot(req.params.id);
+    if (!bot) {
+      res.status(404).json({ error: "Bot not found" });
+      return;
+    }
+    const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+    const encoded = typeof req.body?.audioBase64 === "string" ? req.body.audioBase64 : "";
+    const samples = req.body?.audioSamplesBase64;
+    const multiSample = samples !== undefined;
+    if (!name || name.length > 32 || (!multiSample && !encoded)) {
+      res.status(400).json({ error: "请填写声纹名称并上传录音" });
+      return;
+    }
+    if (multiSample && (!Array.isArray(samples) || samples.length < 3 || samples.length > 8 || samples.some(sample => typeof sample !== "string" || !sample || sample.length > 470_000))) {
+      res.status(400).json({ error: "多句学习需要 3～8 段有效录音" });
+      return;
+    }
+    if (missingVoiceModels("voiceprint").length > 0) {
+      res.status(400).json({ error: "Voice models are missing. Run npm run setup:voice first." });
+      return;
+    }
+    try {
+      const results = [];
+      for (const [index, sample] of (multiSample ? samples as string[] : [encoded]).entries()) {
+        try {
+          results.push(await createVoiceprintFromBrowserAudio(Buffer.from(sample.replace(/^data:[^,]+,/, ""), "base64"), !multiSample));
+        } catch (err) {
+          throw new Error(`第 ${index + 1} 段录音处理失败，${err instanceof Error ? err.message : "请重试"}`);
+        }
+      }
+      const clientUid = `web:${req.user!.id}:${name}`;
+      const saved = botDb.saveVoiceprint({
+        scope: bot.getVoiceprintScope(),
+        name,
+        clientUid,
+        embedding: results[0].embedding,
+        embeddings: multiSample ? results.map(result => result.embedding) : undefined,
+      });
+      bot.refreshVoiceprintProfiles();
+      res.json({
+        voiceprint: { id: saved.id, name: saved.name, createdAt: saved.createdAt, sampleCount: saved.embeddings?.length ?? 1 },
+        transcript: results[0].transcript,
+        transcripts: results.map(result => result.transcript),
+      });
+    } catch (err) {
+      logger.warn({ err, botId: req.params.id }, "Browser voiceprint enrollment failed");
+      res.status(400).json({ error: err instanceof Error ? err.message : "Voiceprint enrollment failed" });
+    }
+  });
+
+  router.delete("/:id/voiceprints/:voiceprintId", requirePermission("bot.manage"), requireBotAccess("id"), (req, res) => {
+    const bot = botManager.getBot(req.params.id);
+    if (!bot) {
+      res.status(404).json({ error: "Bot not found" });
+      return;
+    }
+    const deleted = botDb.deleteVoiceprintById(
+      bot.getVoiceprintScope(),
+      req.params.voiceprintId,
+      `web:${req.user!.id}:`,
+    );
+    if (deleted) bot.refreshVoiceprintProfiles();
+    res.json({ deleted });
   });
 
   router.get("/:id", requireBotAccess("id"), (req, res) => {

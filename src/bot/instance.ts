@@ -46,7 +46,7 @@ import { SpotifyController } from "../music/spotify/controller.js";
 import type { SpotifyTrackEndedEvent } from "../music/spotify/backend.js";
 import type { SpotifyOAuth } from "../music/spotify/spotify-oauth.js";
 import { VoiceDuckingController } from "./voice-ducking.js";
-import { VoiceRequestController, parseVoiceCommand } from "./voice-request.js";
+import { VoiceRequestController, parseVoiceCommand, type VoiceprintProfile } from "./voice-request.js";
 import {
   ManagedVoiceClientRegistry,
   type ManagedVoiceClientOwnerToken,
@@ -168,6 +168,7 @@ export class BotInstance extends EventEmitter {
   private managedVoiceClients: ManagedVoiceClientRegistry;
   private readonly configuredVoiceServerScope: ManagedVoiceClientScope;
   private voiceServerScope: ManagedVoiceClientScope;
+  private readonly voiceprintScope: string;
   private registeredVoiceClientId = 0;
   private registeredVoiceClientOwner: ManagedVoiceClientOwnerToken | null = null;
   private registeredVoiceClientScope: ManagedVoiceClientScope | null = null;
@@ -232,6 +233,7 @@ export class BotInstance extends EventEmitter {
     this.config = options.config;
     this.logger = options.logger.child({ botId: this.id });
     this.avatarStore = options.avatarStore;
+    this.voiceprintScope = `${options.tsOptions.host}:${options.tsOptions.port}`;
 
     this.tsClient = new TS3Client(options.tsOptions, this.logger);
     this.player = new AudioPlayer(this.logger);
@@ -674,7 +676,14 @@ export class BotInstance extends EventEmitter {
     // overwrite a newer instance that reused the same client id.
     this.voiceDucking.reset(true);
     this.tsClient.setVoiceDataEnabled(this.config.voiceRequest.enabled);
-    this.voiceRequest.setEnabled(this.config.voiceRequest.enabled);
+    const voiceprintProfiles = this.database && typeof this.database.listVoiceprints === "function"
+      ? this.getVoiceprintProfiles()
+      : [];
+    this.voiceRequest.setEnabled(
+      this.config.voiceRequest.enabled,
+      voiceprintProfiles,
+      this.config.voiceRequest.mode,
+    );
     this.registerManagedVoiceClient();
     this.profileManager.onConnect();
     this.emit("connected");
@@ -744,12 +753,32 @@ export class BotInstance extends EventEmitter {
     this.voiceDucking.updateSettings(settings);
   }
 
-  updateVoiceRequest(enabled: boolean): void {
+  updateVoiceRequest(enabled: boolean, mode = this.config.voiceRequest.mode): void {
     this.config.voiceRequest.enabled = enabled;
+    this.config.voiceRequest.mode = mode;
     this.tsClient.setVoiceDataEnabled(this.connected && enabled);
-    if (this.connected) this.voiceRequest.setEnabled(enabled);
+    if (this.connected) {
+      const voiceprintProfiles = this.database && typeof this.database.listVoiceprints === "function"
+        ? this.getVoiceprintProfiles()
+        : [];
+      this.voiceRequest.setEnabled(
+        enabled,
+        voiceprintProfiles,
+        this.config.voiceRequest.mode,
+      );
+    }
     else this.voiceRequest.stop();
     if (!enabled) this.player.clearWakeCue();
+  }
+
+  getVoiceprintScope(): string {
+    return this.voiceprintScope;
+  }
+
+  refreshVoiceprintProfiles(): void {
+    if (this.connected && this.config.voiceRequest.enabled) {
+      this.voiceRequest.updateProfiles(this.getVoiceprintProfiles());
+    }
   }
 
   private async sendVoiceRequestMessage(message: string): Promise<void> {
@@ -759,6 +788,14 @@ export class BotInstance extends EventEmitter {
     } catch (err) {
       this.logger.warn({ err }, "Voice request feedback failed");
     }
+  }
+
+  private getVoiceprintProfiles(): VoiceprintProfile[] {
+    return this.database.listVoiceprints(this.voiceprintScope).map((record) => ({
+      name: record.name,
+      embedding: record.embedding,
+      embeddings: record.embeddings,
+    }));
   }
 
   private async handleVoicePlayRequest(clientId: number, transcript: string): Promise<void> {

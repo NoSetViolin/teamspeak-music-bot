@@ -73,14 +73,15 @@ flowchart LR
 
 ### 频道语音点歌（离线识别）
 
-该功能默认关闭。模型由 `npm run setup:voice` 下载到 `data/voice-models/`；`src/bot/voice-models.ts` 定义模型文件路径和唤醒词“布鲁斯布鲁斯”。`GET /api/bot/settings` 返回 `voiceRequest.modelsReady`，`POST /api/bot/settings` 在启用前检查模型，并把 `voiceRequest.enabled` 写入配置、实时通知所有机器人。设置页入口在 `web/src/views/Settings.vue`。
+该功能默认关闭。模型由 `npm run setup:voice` 下载到 `data/voice-models/`；`src/bot/voice-models.ts` 定义声纹、VAD、ASR 和兼容关键词模型的路径。`voiceRequest.mode` 默认是 `voiceprint`，`GET /api/bot/settings` 返回 `voiceRequest.modelsReady`，`POST /api/bot/settings` 在启用前检查对应模型，并把设置实时通知所有机器人。设置页入口在 `web/src/views/Settings.vue`。
 
 1. `src/ts-protocol/client.ts` 接收频道成员的 Opus 包，发出 `voiceActivity`；仅在语音点歌启用时复制音频数据并发出 `voiceData`。`BotInstance` 排除自身和其他受管机器人，再把包交给 `VoiceRequestController`。`voiceActivity` 还用于独立的语音避让功能，两者不要混为一个开关。
 2. `VoiceRequestController` 在主线程维护按说话者区分的 Opus 解码器，将 48 kHz 双声道 PCM 转成单声道浮点样本，发送给 `worker_threads` 中的 `voice-worker.ts`。最多保留 8 个说话者的解码状态。
-3. 工作线程用 `sherpa-onnx-node` 将音频重采样到 16 kHz，执行关键词检测；听到“布鲁斯布鲁斯”后只接收该说话者随后的一句指令。唤醒时机器人播放短提示音。线程用 VAD 切出语句，再运行本地离线识别；超时、短语音或模型错误会返回失败事件。
-4. `parseVoiceCommand()` 接受点歌、暂停、继续、上一首和下一首。`BotInstance.handleVoicePlayRequest()` 把识别结果转换成现有 `play` / `pause` / `resume` / `prev` / `next` 命令，经 `executeCommand()` 走原有播放逻辑，并在 TS 频道发送文字反馈。语音识别在本机完成，搜索与获取歌曲仍依赖对应音源。
+3. 默认声纹模式下，WebUI 引导用户录制 6 句近讲、远讲、轻声和自然语气的唤醒词及例句。每句调用 `/voiceprints/analyze` 检查音量、人声和提取是否成功，录音暂存于浏览器，完整提交后一次保存多组特征。向量保存到 SQLite `voiceprints.embedding` 的 JSON 数组，兼容旧的单向量格式。按 TeamSpeak 服务器保存多个 WebUI 用户的声纹，原始录音不写盘。旧的单录音 API 仍可使用。
+4. 声纹模式使用流式声学关键词检测“布鲁斯布鲁斯”，通过平滑增益处理低音量输入，并从每人独立的最近 4 秒音频中验证已登记声纹。同一人的每组样本独立参与比较，取最高余弦相似度，当前阈值为 0.38，关键词置信度门槛为 0.15。检测与声纹匹配成功后立即播放提示音。ASR 只用于提示音之后的指令，VAD 使用独立的新状态，只识别被唤醒用户随后的一句话。关键词模型与声纹模型均在启用前检查，可运行 `npm run setup:voice` 安装。取消、说话者离开和超时会清理相应会话。
+5. `parseVoiceCommand()` 接受点歌、暂停、继续、上一首和下一首。`BotInstance.handleVoicePlayRequest()` 把唤醒后的识别结果转换成现有 `play` / `pause` / `resume` / `prev` / `next` 命令，经 `executeCommand()` 走原有播放逻辑，并在 TS 频道发送文字反馈。声纹匹配和语音识别在本机完成，搜索与获取歌曲仍依赖对应音源。
 
-连接或热更新开关时启动/停止工作线程；断开、说话者离开、切换频道时清理或取消相关识别状态。改动该功能时同时检查 `src/bot/voice-request.test.ts`、设置 API 的模型校验、提示音与播放帧调度，避免识别计算阻塞音频输出。用户启用步骤和口令示例见 [README 的频道语音点歌章节](README.md#频道语音点歌离线识别)。
+连接或热更新开关时启动/停止工作线程；断开、说话者离开、切换频道时清理或取消相关识别状态。改动该功能时同时检查 `src/bot/voice-request.test.ts`、设置 API 的模型校验、提示音与播放帧调度，避免识别计算阻塞音频输出。安装模型后，`src/bot/voice-worker.integration.test.ts` 使用实际 Opus 编解码和 `bls.m4a` 验证低音量检测、声纹拒绝及唤醒后的指令识别。用户启用步骤和口令示例见 [README 的频道语音点歌章节](README.md#频道语音点歌离线识别)。
 
 ## 5. 配置与持久化
 

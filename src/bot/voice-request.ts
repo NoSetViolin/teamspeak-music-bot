@@ -1,6 +1,6 @@
 import { Worker } from "node:worker_threads";
 import { createOpusEncoder, type Encoder } from "../audio/encoder.js";
-import { ensureVoiceKeyword, missingVoiceModels, voiceModelPaths, WAKE_PHRASE } from "./voice-models.js";
+import { ensureVoiceKeyword, missingVoiceModels, voiceModelPaths, type VoiceWakeMode } from "./voice-models.js";
 import type { Logger } from "../logger.js";
 
 export interface IncomingVoice {
@@ -9,14 +9,20 @@ export interface IncomingVoice {
   data: Buffer;
 }
 
+export interface VoiceprintProfile {
+  name: string;
+  embedding: number[];
+  embeddings?: number[][];
+}
+
 export interface VoiceRequestCallbacks {
-  onWake(clientId: number): void;
-  onResult(clientId: number, text: string): void;
+  onWake(clientId: number, profileName?: string): void;
+  onResult(clientId: number, text: string, profileName?: string): void;
   onFailure(clientId: number, reason: string): void;
   onUnavailable(reason: string): void;
 }
 
-/** Owns the per-speaker Opus decoders and the isolated local-ASR worker. */
+/** Owns per-speaker Opus decoders and the isolated local voice worker. */
 export class VoiceRequestController {
   private worker: Worker | null = null;
   private ready = false;
@@ -24,19 +30,27 @@ export class VoiceRequestController {
   private decoderLastSeen = new Map<number, number>();
   private generation = 0;
   private activeSpeaker: number | null = null;
+  private mode: VoiceWakeMode = "voiceprint";
+  private profiles: VoiceprintProfile[] = [];
+  private receivedPackets = 0;
+  private decodedPackets = 0;
 
   constructor(
     private readonly logger: Logger,
     private readonly callbacks: VoiceRequestCallbacks,
   ) {}
 
-  setEnabled(enabled: boolean): void {
+  setEnabled(enabled: boolean, profiles: VoiceprintProfile[] = this.profiles, mode: VoiceWakeMode = this.mode): void {
+    this.profiles = profiles;
+    this.mode = mode;
+    this.receivedPackets = 0;
+    this.decodedPackets = 0;
     this.stop();
     if (!enabled) return;
     const paths = voiceModelPaths();
-    const missing = missingVoiceModels().filter((file) => file !== paths.keywords);
+    const missing = missingVoiceModels(mode);
     if (missing.length) {
-      this.logger.error({ missing }, "Voice request models are missing; run npm run setup:voice");
+      this.logger.error({ missing, mode }, "Voice request models are missing; run npm run setup:voice");
       this.callbacks.onUnavailable("语音模型未安装，请运行 npm run setup:voice");
       return;
     }
@@ -52,7 +66,7 @@ export class VoiceRequestController {
     let worker: Worker;
     try {
       worker = new Worker(new URL(workerFile, import.meta.url), {
-        workerData: { paths: voiceModelPaths(), wakePhrase: WAKE_PHRASE },
+        workerData: { paths, mode, profiles: this.profiles },
         execArgv: workerFile.endsWith(".ts") ? ["--import", "tsx"] : [],
       });
     } catch (error) {
@@ -61,21 +75,45 @@ export class VoiceRequestController {
       return;
     }
     this.worker = worker;
-    worker.on("message", (message: { type: string; id?: number; text?: string; reason?: string; message?: string }) => {
+    worker.on("message", (message: {
+      type: string;
+      id?: number;
+      text?: string;
+      reason?: string;
+      message?: string;
+      profileName?: string;
+      stage?: string;
+      samples?: number;
+      ready?: boolean;
+      matched?: string;
+      rms?: number;
+      peak?: number;
+      packets?: number;
+      elapsedMs?: number;
+      wakeEngine?: string;
+      similarity?: number;
+      threshold?: number;
+      closestProfile?: string;
+    }) => {
       if (generation !== this.generation) return;
       if (message.type === "ready") {
         this.ready = true;
-        this.logger.info("Local voice request recognition ready");
+        this.logger.info({ mode, profiles: this.profiles.length, wakeEngine: message.wakeEngine }, "Local voice request recognition ready");
+      } else if (message.type === "diagnostic") {
+        this.logger.info(
+          { stage: message.stage, clientId: message.id, samples: message.samples, ready: message.ready, matched: message.matched, closestProfile: message.closestProfile, similarity: message.similarity, threshold: message.threshold, text: message.text, rms: message.rms, peak: message.peak, packets: message.packets, elapsedMs: message.elapsedMs },
+          "Voice request worker diagnostic",
+        );
       } else if (message.type === "wake" && message.id) {
         if (this.activeSpeaker !== null) return;
         this.activeSpeaker = message.id;
-        this.callbacks.onWake(message.id);
+        this.callbacks.onWake(message.id, message.profileName);
       } else if (message.type === "result" && message.id) {
-        if (this.activeSpeaker !== message.id) return;
+        if (this.activeSpeaker !== null && this.activeSpeaker !== message.id) return;
         this.activeSpeaker = null;
-        this.callbacks.onResult(message.id, message.text ?? "");
+        this.callbacks.onResult(message.id, message.text ?? "", message.profileName);
       } else if (message.type === "failure" && message.id) {
-        if (this.activeSpeaker !== message.id) return;
+        if (this.activeSpeaker !== null && this.activeSpeaker !== message.id) return;
         this.activeSpeaker = null;
         this.callbacks.onFailure(message.id, message.reason ?? "语音识别失败");
       } else if (message.type === "error") {
@@ -98,12 +136,22 @@ export class VoiceRequestController {
     });
   }
 
+  updateProfiles(profiles: VoiceprintProfile[]): void {
+    this.profiles = profiles;
+    if (this.worker && this.mode === "voiceprint") {
+      this.worker.postMessage({ type: "profiles", profiles });
+    }
+  }
+
   receive(voice: IncomingVoice): void {
     if (!this.ready || !this.worker || (voice.codec !== 4 && voice.codec !== 5)) return;
+    this.receivedPackets++;
+    if (this.receivedPackets === 1) {
+      this.logger.info({ clientId: voice.clientId, codec: voice.codec }, "Voice request received first forwarded packet");
+    }
     const now = Date.now();
     let decoder = this.decoders.get(voice.clientId);
     if (!decoder) {
-      // Bound native decoder memory when many clients speak over time.
       if (this.decoders.size >= 8) {
         const oldest = [...this.decoderLastSeen].sort((a, b) => a[1] - b[1])[0];
         if (oldest) this.removeSpeaker(oldest[0]);
@@ -114,6 +162,10 @@ export class VoiceRequestController {
     this.decoderLastSeen.set(voice.clientId, now);
     try {
       const pcm = decoder.decode(voice.data);
+      this.decodedPackets++;
+      if (this.decodedPackets === 1) {
+        this.logger.info({ clientId: voice.clientId, pcmBytes: pcm.length }, "Voice request decoded first Opus packet");
+      }
       if (pcm.length < 4 || pcm.length > 7680 || pcm.length % 4 !== 0) return;
       const mono = new Float32Array(pcm.length / 4);
       for (let i = 0; i < mono.length; i++) {
@@ -121,7 +173,7 @@ export class VoiceRequestController {
       }
       this.worker.postMessage({ type: "audio", id: voice.clientId, pcm: mono }, [mono.buffer]);
     } catch (error) {
-      this.logger.debug({ error, clientId: voice.clientId }, "Skipped invalid Opus voice packet");
+      this.logger.warn({ error, clientId: voice.clientId }, "Skipped invalid Opus voice packet");
     }
   }
 
@@ -157,7 +209,7 @@ export class VoiceRequestController {
 
 export type VoiceCommand = { name: "play"; query: string } | { name: "pause" | "resume" | "prev" | "next" };
 
-/** Parse the one command spoken after a successful wake. */
+/** Parse a single spoken command after a successful voiceprint match. */
 export function parseVoiceCommand(transcript: string): VoiceCommand | null {
   const clean = transcript.replace(/<\|[^|]*\|>/g, "").trim()
     .replace(/^布鲁斯[，,、\s]*布鲁斯[，,。！!？?\s]*/u, "")

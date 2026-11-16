@@ -10,6 +10,7 @@ import {
 import { dirname } from "node:path";
 import type { BotAccess, GuestPermissions } from "./permissions.js";
 import { GUEST_PERMISSION_FLAGS } from "./permissions.js";
+import type { VoiceWakeMode } from "../bot/voice-models.js";
 
 export interface GuestModeConfig {
   enabled: boolean;
@@ -62,6 +63,8 @@ export interface VoiceDuckingConfig {
 
 export interface VoiceRequestConfig {
   enabled: boolean;
+  /** Voiceprint recognition is the default wake mechanism. */
+  mode: VoiceWakeMode;
 }
 
 /**
@@ -194,7 +197,7 @@ export function getDefaultConfig(): BotConfig {
       enabled: false,
       volumePercent: 30,
     },
-    voiceRequest: { enabled: false },
+    voiceRequest: { enabled: false, mode: "voiceprint" },
     idleTimeoutMinutes: 0,
     localAudioEnabled: true,
     savedQueuesEnabled: false,
@@ -428,6 +431,7 @@ export function loadConfig(path: string): BotConfig {
     };
     const voiceRequest: VoiceRequestConfig = {
       enabled: partial.voiceRequest?.enabled === true,
+      mode: partial.voiceRequest?.mode === "keyword" ? "keyword" : "voiceprint",
     };
 
     // defaultPlatform → an explicit operator default (issue #126). Keep it only

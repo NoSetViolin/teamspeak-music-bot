@@ -56,7 +56,7 @@ describe("config", () => {
   });
 
   it("keeps voice requests opt-in even for malformed saved settings", () => {
-    expect(getDefaultConfig().voiceRequest).toEqual({ enabled: false });
+    expect(getDefaultConfig().voiceRequest).toEqual({ enabled: false, mode: "voiceprint" });
     const dir = makeTmpDir();
     const path = join(dir, "config.json");
     writeFileSync(path, JSON.stringify({ voiceRequest: { enabled: "yes" } }));

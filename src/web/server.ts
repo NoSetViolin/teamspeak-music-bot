@@ -97,6 +97,7 @@ export function createWebServer(options: WebServerOptions): WebServer {
     next();
   });
 
+  app.use(/^\/api\/bot\/[^/]+\/voiceprints\/?$/, express.json({ limit: "4mb" }));
   app.use(express.json({ limit: "400kb" }));
   app.use(cookieParser());
 

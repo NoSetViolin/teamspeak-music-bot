@@ -888,7 +888,7 @@
       <label class="profile-toggle behavior-toggle">
         <div class="profile-toggle-text">
           <div class="profile-toggle-label">频道语音点歌</div>
-          <div class="profile-toggle-hint">说“布鲁斯 布鲁斯”，听到提示音后说“我要听／放一首／播放／点歌＋歌名”，或说“暂停”“继续”“上一首”“下一首”。离线识别；默认关闭。</div>
+          <div class="profile-toggle-hint">先在下方网页录制“布鲁斯布鲁斯”完成声纹学习。之后在 TeamSpeak 先说唤醒词，听到提示音再说“播放／点歌＋歌名”、或说“暂停”“继续”“上一首”“下一首”。支持多人，默认关闭。</div>
           <div v-if="!voiceRequestModelsReady" class="profile-toggle-hint">模型未安装：在服务端运行 npm run setup:voice 后刷新页面。</div>
           <div v-if="voiceRequestMessage" class="profile-toggle-hint" role="status">{{ voiceRequestMessage }}</div>
         </div>
@@ -900,6 +900,76 @@
           @change="saveVoiceRequest"
         />
       </label>
+
+      <div v-if="voiceRequestModelsReady && voiceRequestEnabled" class="voiceprint-card">
+        <div class="voiceprint-card-header">
+          <div class="voiceprint-orb"><Icon icon="mdi:microphone-settings" /></div>
+          <div>
+            <div class="voiceprint-title">让布鲁斯熟悉你的声音</div>
+            <div class="voiceprint-subtitle">6 句引导学习，覆盖近讲、远讲与自然说话</div>
+          </div>
+          <span class="voiceprint-badge"><Icon icon="mdi:shield-check" /> 本地处理</span>
+        </div>
+        <div class="voiceprint-steps" aria-label="声纹学习步骤">
+          <div class="voiceprint-step"><span>1</span><div><strong>选择机器人</strong><small>声纹按 TeamSpeak 服务器保存</small></div></div>
+          <div class="voiceprint-step"><span>2</span><div><strong>用日常的麦克风</strong><small>保持自然，按每一步提示调整距离</small></div></div>
+          <div class="voiceprint-step"><span>3</span><div><strong>完成 6 句录音</strong><small>逐句检查，全部完成后保存声音档案</small></div></div>
+        </div>
+        <div class="voiceprint-form">
+          <label class="voiceprint-field">
+            <span>绑定机器人</span>
+            <select v-model="voiceprintBotId" class="input" :disabled="voiceprintBusy || voiceprintSamples.length > 0" @change="loadVoiceprints">
+              <option value="">请选择机器人</option>
+              <option v-for="bot in store.bots" :key="bot.id" :value="bot.id">{{ bot.name }}</option>
+            </select>
+          </label>
+          <label class="voiceprint-field">
+            <span>声纹名称</span>
+            <input v-model="voiceprintName" class="input" maxlength="32" placeholder="例如：我的声音" :disabled="voiceprintBusy || voiceprintSamples.length > 0" />
+          </label>
+        </div>
+        <div class="voiceprint-progress" aria-label="学习进度">
+          <div class="voiceprint-progress-heading"><strong>{{ voiceprintCompleted ? '声音档案已就绪' : '逐步完善你的声音档案' }}</strong><span>{{ voiceprintSamples.length }} / {{ voiceprintPrompts.length }}</span></div>
+          <div class="voiceprint-progress-track" role="progressbar" :aria-valuenow="voiceprintSamples.length" :aria-valuemax="voiceprintPrompts.length" aria-valuemin="0" aria-label="已完成录音数"><span :style="{ width: `${voiceprintSamples.length / voiceprintPrompts.length * 100}%` }" /></div>
+          <div class="voiceprint-checkpoints">
+            <div v-for="(prompt, index) in voiceprintPrompts" :key="prompt.title" :class="{ done: index < voiceprintSamples.length, current: index === voiceprintSamples.length }">
+              <Icon :icon="index < voiceprintSamples.length ? 'mdi:check-circle' : prompt.icon" /><small>{{ prompt.title }}</small>
+            </div>
+          </div>
+        </div>
+        <div v-if="voiceprintSamples.length < voiceprintPrompts.length" class="voiceprint-coach">
+          <span class="voiceprint-coach-step">第 {{ voiceprintSamples.length + 1 }} 句 · {{ voiceprintCurrentPrompt.title }}</span>
+          <p>{{ voiceprintCurrentPrompt.hint }}</p>
+          <div class="voiceprint-phrase" :class="{ 'is-recording': voiceprintRecording }">
+          <Icon icon="mdi:format-quote-open" />
+          <div><small>{{ voiceprintRecording ? '正在聆听，说完后点击停止录音' : '点击录音后，自然读出这一句' }}</small><strong>{{ voiceprintCurrentPrompt.phrase }}</strong></div>
+          <Icon icon="mdi:format-quote-close" />
+          </div>
+          <small class="voiceprint-coach-tip">每句录制约 2～6 秒，最长 8 秒。远距离步骤请保持平常音量。</small>
+        </div>
+        <div v-else class="voiceprint-finished"><Icon :icon="voiceprintCompleted ? 'mdi:check-decagram' : 'mdi:account-voice'" /><strong>{{ voiceprintCompleted ? '已经记住你的声音' : '6 句已收集，准备保存' }}</strong><p>{{ voiceprintCompleted ? '在 TeamSpeak 说“布鲁斯布鲁斯”，听到提示音后再说指令。' : '保存后，机器人会使用这些不同距离和语气的声音特征进行唤醒匹配。' }}</p></div>
+        <div class="voiceprint-actions">
+          <button v-if="voiceprintSamples.length < voiceprintPrompts.length" class="voiceprint-record-btn" :class="{ recording: voiceprintRecording }" :disabled="voiceprintSaving || voiceprintStarting || !voiceprintBotId || !voiceprintName.trim()" @click="toggleVoiceprintRecording">
+            <Icon :icon="voiceprintRecording ? 'mdi:stop' : 'mdi:microphone'" />
+            {{ voiceprintRecording ? `停止录音 ${voiceprintSeconds}s` : voiceprintStarting ? '正在连接麦克风…' : `录制第 ${voiceprintSamples.length + 1} 句` }}
+          </button>
+          <button v-else-if="!voiceprintCompleted" class="voiceprint-record-btn" :disabled="voiceprintSaving" @click="saveVoiceprintLearning"><Icon icon="mdi:content-save-check" /> 保存声音档案</button>
+          <button v-if="voiceprintSamples.length && !voiceprintCompleted" class="voiceprint-secondary-btn" :disabled="voiceprintBusy" @click="redoVoiceprintSample">重录上一句</button>
+          <button v-if="voiceprintSamples.length" class="voiceprint-secondary-btn" :disabled="voiceprintBusy" @click="resetVoiceprintLearning">{{ voiceprintCompleted ? '开始新一轮学习' : '重新开始' }}</button>
+          <span v-if="voiceprintSaving" class="voiceprint-status" role="status"><Icon icon="mdi:loading" class="spin" /> {{ voiceprintSamples.length === voiceprintPrompts.length ? '正在保存多组声纹…' : '正在检查这一句…' }}</span>
+          <span v-else-if="voiceprintMessage" class="voiceprint-status" :class="voiceprintMessageTone" role="status">{{ voiceprintMessage }}</span>
+        </div>
+        <audio v-if="voiceprintPreviewUrl" :src="voiceprintPreviewUrl" controls class="voiceprint-preview" aria-label="刚刚录制的声音预览" />
+        <div v-if="voiceprintSamples.length" class="voiceprint-sample-receipts"><div v-for="(sample, index) in voiceprintSamples" :key="index"><Icon icon="mdi:check-circle-outline" /><span>{{ voiceprintPrompts[index]!.title }}</span><small>{{ sample.duration.toFixed(1) }} 秒 · 听到“{{ sample.transcript }}”</small></div></div>
+        <div class="voiceprint-privacy"><Icon icon="mdi:lock-outline" /><span>录音暂存于本页，在本机服务分析。全部完成后只保存声纹特征，多组样本共同用于匹配。</span></div>
+        <div v-if="voiceprintProfiles.length" class="voiceprint-list">
+          <div class="voiceprint-list-title">这个机器人已学习的声音</div>
+          <div v-for="profile in voiceprintProfiles" :key="profile.id" class="voiceprint-profile-row">
+            <span><Icon icon="mdi:account-voice" /> {{ profile.name }} <small>{{ profile.sampleCount || 1 }} 组样本{{ profile.ownedByCurrentUser ? ' · 我的声纹' : '' }}</small></span>
+            <button v-if="profile.ownedByCurrentUser" class="voiceprint-delete" type="button" title="删除声纹" @click="deleteVoiceprint(profile.id, profile.name)"><Icon icon="mdi:delete-outline" /></button>
+          </div>
+        </div>
+      </div>
 
       <div class="setting-row voice-ducking-volume">
         <div class="setting-label">
@@ -1852,6 +1922,34 @@ const voiceRequestEnabled = ref(false);
 const voiceRequestModelsReady = ref(false);
 const voiceRequestSaving = ref(false);
 const voiceRequestMessage = ref('');
+const voiceprintBotId = ref('');
+const voiceprintName = ref('我的声音');
+const voiceprintRecording = ref(false);
+const voiceprintStarting = ref(false);
+const voiceprintSaving = ref(false);
+const voiceprintCompleted = ref(false);
+const voiceprintBusy = computed(() => voiceprintRecording.value || voiceprintSaving.value || voiceprintStarting.value);
+const voiceprintPrompts = [
+  { title: '自然唤醒', icon: 'mdi:microphone', phrase: '布鲁斯布鲁斯', hint: '保持平常坐姿，距离麦克风约 20～30 厘米，用平时说话的音量读出唤醒词。' },
+  { title: '远距离', icon: 'mdi:arrow-expand-horizontal', phrase: '布鲁斯布鲁斯', hint: '退到你平时希望唤醒机器人的位置，例如距离麦克风 0.5～1 米。保持自然音量。' },
+  { title: '轻声唤醒', icon: 'mdi:volume-low', phrase: '布鲁斯布鲁斯', hint: '回到常用位置，稍微放轻声音，像安静聊天时一样说出唤醒词。' },
+  { title: '不同语速', icon: 'mdi:waveform', phrase: '布鲁斯布鲁斯', hint: '用另一种自然语气或略慢的语速再说一遍，帮助覆盖日常发音变化。' },
+  { title: '日常点歌', icon: 'mdi:music-note', phrase: '布鲁斯布鲁斯，帮我播放一首喜欢的歌', hint: '像和朋友说话一样，连贯读完这句点歌例句，让声音档案覆盖更多发音。' },
+  { title: '远讲例句', icon: 'mdi:account-voice', phrase: '布鲁斯布鲁斯，今天想听一点轻松的音乐', hint: '再次退到常用的远距离位置，自然读完整句。说完后点击停止，完成最后一组样本。' },
+];
+const voiceprintSamples = ref<Array<{ audioBase64: string; transcript: string; duration: number }>>([]);
+const voiceprintCurrentPrompt = computed(() => voiceprintPrompts[Math.min(voiceprintSamples.value.length, voiceprintPrompts.length - 1)]!);
+let voiceprintSessionVersion = 0;
+const voiceprintSeconds = ref(0);
+const voiceprintMessage = ref('');
+const voiceprintMessageTone = ref<'ok' | 'warn'>('ok');
+const voiceprintPreviewUrl = ref('');
+const voiceprintProfiles = ref<Array<{ id: string; name: string; createdAt: number; ownedByCurrentUser: boolean; sampleCount?: number }>>([]);
+let voiceprintRecorder: MediaRecorder | null = null;
+let voiceprintStream: MediaStream | null = null;
+let voiceprintChunks: Blob[] = [];
+let voiceprintTimer: ReturnType<typeof setInterval> | null = null;
+let voiceprintStopTimer: ReturnType<typeof setTimeout> | null = null;
 const voiceDuckingVolumePercent = ref(30);
 const voiceDuckingLoaded = ref(false);
 const voiceDuckingSaving = ref(false);
@@ -1979,6 +2077,190 @@ async function saveVoiceRequest() {
     voiceRequestSaving.value = false;
   }
 }
+
+function chooseVoiceprintMime(): string {
+  const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
+  return candidates.find((mime) => MediaRecorder.isTypeSupported(mime)) ?? '';
+}
+
+async function loadVoiceprints() {
+  voiceprintProfiles.value = [];
+  if (!voiceprintBotId.value) return;
+  try {
+    const res = await axios.get(`/api/bot/${voiceprintBotId.value}/voiceprints`);
+    voiceprintProfiles.value = Array.isArray(res.data?.voiceprints) ? res.data.voiceprints : [];
+  } catch {
+    voiceprintMessageTone.value = 'warn';
+    voiceprintMessage.value = '声纹列表加载失败，请稍后重试';
+  }
+}
+
+function stopVoiceprintTimer() {
+  if (voiceprintTimer) clearInterval(voiceprintTimer);
+  if (voiceprintStopTimer) clearTimeout(voiceprintStopTimer);
+  voiceprintTimer = null;
+  voiceprintStopTimer = null;
+}
+
+function stopVoiceprintStream() {
+  voiceprintStream?.getTracks().forEach((track) => track.stop());
+  voiceprintStream = null;
+}
+
+function finishVoiceprintRecording() {
+  stopVoiceprintTimer();
+  if (voiceprintRecorder && voiceprintRecorder.state !== 'inactive') voiceprintRecorder.stop();
+}
+
+async function toggleVoiceprintRecording() {
+  if (voiceprintRecording.value) {
+    finishVoiceprintRecording();
+    return;
+  }
+  if (voiceprintBusy.value) return;
+  if (!voiceprintBotId.value || !voiceprintName.value.trim()) {
+    voiceprintMessageTone.value = 'warn';
+    voiceprintMessage.value = '请先选择机器人并填写声纹名称';
+    return;
+  }
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+    voiceprintMessageTone.value = 'warn';
+    voiceprintMessage.value = '当前浏览器不支持麦克风录音';
+    return;
+  }
+  voiceprintStarting.value = true;
+  const version = voiceprintSessionVersion;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+    });
+    if (version !== voiceprintSessionVersion) {
+      stream.getTracks().forEach(track => track.stop());
+      return;
+    }
+    voiceprintStream = stream;
+    const mimeType = chooseVoiceprintMime();
+    voiceprintRecorder = new MediaRecorder(voiceprintStream, mimeType ? { mimeType } : undefined);
+    voiceprintChunks = [];
+    voiceprintMessage.value = '';
+    voiceprintSeconds.value = 0;
+    voiceprintRecording.value = true;
+    voiceprintRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0) voiceprintChunks.push(event.data);
+    };
+    voiceprintRecorder.onstop = () => {
+      voiceprintRecording.value = false;
+      stopVoiceprintStream();
+      const blob = new Blob(voiceprintChunks, { type: voiceprintRecorder?.mimeType || mimeType || 'audio/webm' });
+      if (voiceprintPreviewUrl.value) URL.revokeObjectURL(voiceprintPreviewUrl.value);
+      voiceprintPreviewUrl.value = URL.createObjectURL(blob);
+      void analyzeVoiceprintSample(blob);
+    };
+    voiceprintRecorder.start();
+    voiceprintTimer = setInterval(() => { voiceprintSeconds.value += 1; }, 1000);
+    voiceprintStopTimer = setTimeout(finishVoiceprintRecording, 8000);
+  } catch (err: any) {
+    stopVoiceprintStream();
+    voiceprintRecording.value = false;
+    voiceprintMessageTone.value = 'warn';
+    voiceprintMessage.value = err?.name === 'NotAllowedError' ? '麦克风权限被拒绝，请允许浏览器访问麦克风' : '无法启动录音，请检查麦克风后重试';
+  } finally {
+    voiceprintStarting.value = false;
+  }
+}
+
+async function analyzeVoiceprintSample(blob: Blob) {
+  voiceprintSaving.value = true;
+  voiceprintMessage.value = '';
+  const version = voiceprintSessionVersion;
+  try {
+    const audioBase64 = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error ?? new Error('read failed'));
+      reader.readAsDataURL(blob);
+    });
+    const res = await axios.post(`/api/bot/${voiceprintBotId.value}/voiceprints/analyze`, { audioBase64 });
+    if (version !== voiceprintSessionVersion) return;
+    voiceprintSamples.value.push({ audioBase64, transcript: res.data.transcript, duration: res.data.duration });
+    voiceprintMessageTone.value = 'ok';
+    voiceprintMessage.value = voiceprintSamples.value.length === voiceprintPrompts.length
+      ? '所有例句已通过检查，点击保存声音档案完成学习。'
+      : `第 ${voiceprintSamples.value.length} 句已通过，接下来请按上方提示录制下一句。`;
+  } catch (err: any) {
+    if (version !== voiceprintSessionVersion) return;
+    voiceprintMessageTone.value = 'warn';
+    voiceprintMessage.value = err?.response?.data?.error ?? '这一句分析失败，请重新录制当前例句';
+  } finally {
+    if (version === voiceprintSessionVersion) voiceprintSaving.value = false;
+  }
+}
+
+async function saveVoiceprintLearning() {
+  if (voiceprintBusy.value || voiceprintSamples.value.length !== voiceprintPrompts.length) return;
+  voiceprintSaving.value = true;
+  const version = voiceprintSessionVersion;
+  try {
+    await axios.post(`/api/bot/${voiceprintBotId.value}/voiceprints`, {
+      name: voiceprintName.value.trim(),
+      audioSamplesBase64: voiceprintSamples.value.map(sample => sample.audioBase64),
+    });
+    if (version !== voiceprintSessionVersion) return;
+    voiceprintCompleted.value = true;
+    voiceprintSamples.value.forEach(sample => { sample.audioBase64 = ''; });
+    voiceprintMessageTone.value = 'ok';
+    voiceprintMessage.value = '6 组声纹已保存并生效，可以到 TeamSpeak 唤醒机器人了。';
+    await loadVoiceprints();
+  } catch (err: any) {
+    if (version !== voiceprintSessionVersion) return;
+    voiceprintMessageTone.value = 'warn';
+    voiceprintMessage.value = err?.response?.data?.error ?? '保存失败，录音仍保留在本页，可以再次点击保存';
+  } finally {
+    if (version === voiceprintSessionVersion) voiceprintSaving.value = false;
+  }
+}
+
+function redoVoiceprintSample() {
+  if (voiceprintBusy.value) return;
+  voiceprintSamples.value.pop();
+  voiceprintMessage.value = '请按上方提示重新录制这一句';
+  voiceprintMessageTone.value = 'ok';
+  if (voiceprintPreviewUrl.value) URL.revokeObjectURL(voiceprintPreviewUrl.value);
+  voiceprintPreviewUrl.value = '';
+}
+
+function resetVoiceprintLearning() {
+  if (voiceprintBusy.value) return;
+  voiceprintSessionVersion++;
+  voiceprintSamples.value = [];
+  voiceprintCompleted.value = false;
+  voiceprintMessage.value = '';
+  if (voiceprintPreviewUrl.value) URL.revokeObjectURL(voiceprintPreviewUrl.value);
+  voiceprintPreviewUrl.value = '';
+}
+
+async function deleteVoiceprint(id: string, name: string) {
+  if (!window.confirm(`确定删除声纹“${name}”吗？`)) return;
+  try {
+    await axios.delete(`/api/bot/${voiceprintBotId.value}/voiceprints/${id}`);
+    voiceprintMessageTone.value = 'ok';
+    voiceprintMessage.value = `已删除声纹“${name}”`;
+    await loadVoiceprints();
+  } catch {
+    voiceprintMessageTone.value = 'warn';
+    voiceprintMessage.value = '删除失败，请稍后重试';
+  }
+}
+
+watch(
+  () => store.bots.map((bot) => bot.id).join(','),
+  () => {
+    if (!voiceprintBotId.value && store.bots.length > 0) {
+      voiceprintBotId.value = store.bots[0].id;
+      void loadVoiceprints();
+    }
+  },
+);
 
 async function saveLocalAudioEnabled() {
   try {
@@ -2716,6 +2998,11 @@ onUnmounted(() => {
   if (qqQr.pollTimer) clearInterval(qqQr.pollTimer);
   if (bilibiliQr.pollTimer) clearInterval(bilibiliQr.pollTimer);
   if (kugouQr.pollTimer) clearInterval(kugouQr.pollTimer);
+  voiceprintSessionVersion++;
+  if (voiceprintRecorder) voiceprintRecorder.onstop = null;
+  if (voiceprintRecording.value) finishVoiceprintRecording();
+  stopVoiceprintStream();
+  if (voiceprintPreviewUrl.value) URL.revokeObjectURL(voiceprintPreviewUrl.value);
 });
 </script>
 
@@ -3606,6 +3893,93 @@ onUnmounted(() => {
   padding: 4px 0 14px;
 }
 
+.voiceprint-card {
+  position: relative;
+  overflow: hidden;
+  margin: 18px 0 20px;
+  padding: 22px;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 28%, var(--border-color));
+  border-radius: 20px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--color-primary) 11%, var(--bg-secondary)), var(--bg-secondary) 58%);
+}
+.voiceprint-card::after {
+  position: absolute;
+  top: -80px;
+  right: -50px;
+  width: 220px;
+  height: 220px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--color-primary) 14%, transparent);
+  content: '';
+  pointer-events: none;
+}
+.voiceprint-card-header, .voiceprint-actions, .voiceprint-profile-row { display: flex; align-items: center; }
+.voiceprint-card-header { position: relative; z-index: 1; gap: 12px; }
+.voiceprint-orb { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 15px; color: var(--color-on-primary); background: var(--color-primary); font-size: 23px; box-shadow: 0 8px 22px color-mix(in srgb, var(--color-primary) 30%, transparent); }
+.voiceprint-title { font-size: 16px; font-weight: 700; color: var(--text-primary); }
+.voiceprint-subtitle { margin-top: 3px; font-size: 12px; color: var(--text-secondary); }
+.voiceprint-badge { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; padding: 6px 9px; border-radius: 999px; color: var(--color-primary); background: color-mix(in srgb, var(--color-primary) 12%, transparent); font-size: 11px; font-weight: 600; }
+.voiceprint-steps { position: relative; z-index: 1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 22px 0 18px; }
+.voiceprint-step { display: flex; gap: 9px; align-items: flex-start; padding: 12px; border: 1px solid var(--border-color); border-radius: 13px; background: color-mix(in srgb, var(--bg-primary) 42%, transparent); }
+.voiceprint-step > span { display: grid; place-items: center; flex: 0 0 auto; width: 22px; height: 22px; border-radius: 50%; color: var(--color-on-primary); background: var(--color-primary); font-size: 11px; font-weight: 700; }
+.voiceprint-step strong, .voiceprint-step small { display: block; }
+.voiceprint-step strong { font-size: 12px; color: var(--text-primary); }
+.voiceprint-step small { margin-top: 4px; color: var(--text-secondary); font-size: 11px; line-height: 1.4; }
+.voiceprint-form { position: relative; z-index: 1; display: grid; grid-template-columns: 1.4fr 1fr; gap: 12px; }
+.voiceprint-field span { display: block; margin-bottom: 6px; color: var(--text-secondary); font-size: 12px; }
+.voiceprint-progress { margin: 22px 0 18px; }
+.voiceprint-progress-heading { display: flex; justify-content: space-between; align-items: center; color: var(--text-secondary); font-size: 12px; }
+.voiceprint-progress-heading strong { color: var(--text-primary); font-weight: 600; }
+.voiceprint-progress-heading > span { color: var(--color-primary); font-variant-numeric: tabular-nums; }
+.voiceprint-progress-track { height: 5px; margin: 12px 0 16px; overflow: hidden; border-radius: 99px; background: var(--border-color); }
+.voiceprint-progress-track > span { display: block; height: 100%; border-radius: inherit; background: var(--color-primary); transition: width .35s ease; }
+.voiceprint-checkpoints { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
+.voiceprint-checkpoints > div { display: flex; align-items: center; flex-direction: column; gap: 7px; padding: 10px 4px; border: 1px solid transparent; border-radius: 12px; color: var(--text-tertiary); }
+.voiceprint-checkpoints svg { font-size: 21px; }
+.voiceprint-checkpoints small { font-size: 10px; white-space: nowrap; }
+.voiceprint-checkpoints .current { border-color: color-mix(in srgb, var(--color-primary) 35%, transparent); color: var(--color-primary); background: color-mix(in srgb, var(--color-primary) 8%, transparent); }
+.voiceprint-checkpoints .done { color: #369c72; }
+.voiceprint-coach { padding: 18px; margin-bottom: 16px; border: 1px solid var(--border-color); border-radius: 17px; background: color-mix(in srgb, var(--bg-primary) 70%, transparent); }
+.voiceprint-coach-step { display: inline-flex; padding: 5px 9px; border-radius: 7px; color: var(--color-primary); background: color-mix(in srgb, var(--color-primary) 10%, transparent); font-size: 11px; font-weight: 600; }
+.voiceprint-coach p { margin: 12px 0; color: var(--text-secondary); font-size: 12px; line-height: 1.8; }
+.voiceprint-coach-tip { display: block; color: var(--text-tertiary); line-height: 1.7; font-size: 11px; }
+.voiceprint-finished { display: flex; align-items: center; flex-direction: column; gap: 12px; padding: 28px 16px; margin-bottom: 16px; text-align: center; }
+.voiceprint-finished > svg { font-size: 44px; color: #369c72; }
+.voiceprint-finished strong { color: var(--text-primary); font-size: 17px; }
+.voiceprint-finished p { margin: 0; color: var(--text-secondary); font-size: 12px; line-height: 1.7; }
+.voiceprint-secondary-btn { padding: 9px 12px; border: 1px solid var(--border-color); border-radius: 10px; background: transparent; color: var(--text-secondary); cursor: pointer; }
+.voiceprint-secondary-btn:disabled { opacity: .45; cursor: default; }
+.voiceprint-sample-receipts { display: grid; gap: 8px; margin-top: 16px; }
+.voiceprint-sample-receipts > div { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; font-size: 11px; color: var(--text-secondary); }
+.voiceprint-sample-receipts svg { color: #369c72; font-size: 16px; }
+.voiceprint-sample-receipts small { color: var(--text-tertiary); font-size: 11px; overflow-wrap: anywhere; }
+.voiceprint-phrase { display: flex; align-items: center; justify-content: center; gap: 9px; margin: 16px 0; padding: 14px; border-radius: 14px; color: var(--text-secondary); background: color-mix(in srgb, var(--color-primary) 8%, transparent); text-align: center; }
+.voiceprint-phrase > svg { color: var(--color-primary); font-size: 18px; }
+.voiceprint-phrase small, .voiceprint-phrase strong { display: block; }
+.voiceprint-phrase small { font-size: 11px; }
+.voiceprint-phrase strong { margin-top: 2px; color: var(--text-primary); font-size: 20px; letter-spacing: 3px; }
+.voiceprint-phrase.is-recording { box-shadow: 0 0 0 2px color-mix(in srgb, #d64f67 35%, transparent); }
+.voiceprint-coach .voiceprint-phrase strong { font-size: clamp(16px, 2.5vw, 20px); letter-spacing: 1px; line-height: 1.8; }
+.voiceprint-actions { flex-wrap: wrap; gap: 12px; }
+.voiceprint-record-btn { display: inline-flex; align-items: center; gap: 8px; padding: 11px 16px; border: 0; border-radius: 12px; color: var(--color-on-primary); background: var(--color-primary); font-weight: 700; cursor: pointer; transition: transform .15s ease, box-shadow .15s ease; }
+.voiceprint-record-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 8px 18px color-mix(in srgb, var(--color-primary) 25%, transparent); }
+.voiceprint-record-btn:disabled { opacity: .45; cursor: default; }
+.voiceprint-record-btn.recording { background: #d64f67; }
+.voiceprint-status { display: inline-flex; align-items: center; gap: 5px; color: var(--text-secondary); font-size: 12px; }
+.voiceprint-status.ok { color: #4caf84; }
+.voiceprint-status.warn { color: #d67b62; }
+.voiceprint-preview { display: block; width: 100%; height: 36px; margin-top: 14px; }
+.voiceprint-privacy { display: flex; gap: 6px; margin-top: 13px; color: var(--text-tertiary); font-size: 11px; line-height: 1.5; }
+.voiceprint-privacy svg { flex: 0 0 auto; margin-top: 1px; color: var(--color-primary); }
+.voiceprint-list { margin-top: 18px; padding-top: 15px; border-top: 1px solid var(--border-color); }
+.voiceprint-list-title { margin-bottom: 8px; color: var(--text-secondary); font-size: 12px; font-weight: 600; }
+.voiceprint-profile-row { justify-content: space-between; padding: 8px 0; color: var(--text-primary); font-size: 13px; }
+.voiceprint-profile-row span { display: inline-flex; align-items: center; gap: 7px; }
+.voiceprint-profile-row span svg { color: var(--color-primary); }
+.voiceprint-profile-row small { color: var(--text-tertiary); font-size: 10px; }
+.voiceprint-delete { padding: 4px; border: 0; color: var(--text-tertiary); background: transparent; cursor: pointer; }
+.voiceprint-delete:hover { color: #d64f67; }
+
 .voice-ducking-hint {
   font-size: 12px;
   color: var(--text-tertiary);
@@ -3642,6 +4016,13 @@ onUnmounted(() => {
 }
 
 @media (max-width: 768px) {
+  .voiceprint-card { padding: 16px; border-radius: 16px; }
+  .voiceprint-badge { display: none; }
+  .voiceprint-steps, .voiceprint-form { grid-template-columns: 1fr; }
+  .voiceprint-step { padding: 10px; }
+  .voiceprint-checkpoints { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .voiceprint-coach { padding: 14px; }
+
   .profile-bot-header {
     padding: 14px 12px;
     font-size: 15px;
