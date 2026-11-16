@@ -83,6 +83,27 @@ async function main() {
   const qqStore = createQqSessionStore(path.join(COOKIE_DIR, "qq-session.json"), path.join(COOKIE_DIR, "qq.json"));
   const cookieStore = createCookieStore(COOKIE_DIR, qqStore);
   const avatarStore = createAvatarStore(AVATAR_DIR);
+
+  // Outbound proxy for the NetEase sidecar. On a cloud host NetEase answers
+  // -460 ("网络环境存在风险") by IP, so the request has to leave through somewhere
+  // else. Config wins over the environment: a container-wide HTTPS_PROXY set
+  // for unrelated tools must not silently reroute music traffic.
+  const musicProxy =
+    config.musicProxy ||
+    process.env.HTTPS_PROXY ||
+    process.env.https_proxy ||
+    process.env.HTTP_PROXY ||
+    process.env.http_proxy ||
+    "";
+  if (musicProxy) {
+    neteaseProvider.setProxy(musicProxy);
+    // Credentials in a proxy URL are common; never put them in the log.
+    logger.info(
+      { proxy: musicProxy.replace(/\/\/[^@/]+@/, "//***@") },
+      "NetEase requests will go through a proxy",
+    );
+  }
+
   const neteaseCookie = cookieStore.load("netease");
   if (neteaseCookie) neteaseProvider.setCookie(neteaseCookie);
   const qqSession = (process.env.QQ_MUSIC_MANAGED_SESSION ?? "1") === "1" && isProviderEnabled(config, "qq")
