@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeCookie } from "./cookie-normalize.js";
+import type { createQqSessionStore } from "./qq-session.js";
 
 /** Platforms with a persisted credential blob. For jellyfin the "cookie" is a
  *  JSON string carrying the access token / userId / deviceId (see jellyfin.ts). */
@@ -22,7 +23,7 @@ export interface CookieStore {
   load(platform: CookiePlatform): string;
 }
 
-export function createCookieStore(cookieDir: string): CookieStore {
+export function createCookieStore(cookieDir: string, qqStore?: ReturnType<typeof createQqSessionStore>): CookieStore {
   if (!fs.existsSync(cookieDir)) {
     fs.mkdirSync(cookieDir, { recursive: true });
   }
@@ -38,10 +39,18 @@ export function createCookieStore(cookieDir: string): CookieStore {
 
   return {
     save(platform: CookiePlatform, cookie: string): void {
-      write(platform, storesCookieHeader(platform) ? normalizeCookie(cookie) : cookie);
+      const normalized = storesCookieHeader(platform) ? normalizeCookie(cookie) : cookie;
+      if (platform === "qq" && qqStore) {
+        qqStore.save({ cookie: normalized });
+        return;
+      }
+      write(platform, normalized);
     },
 
     load(platform: CookiePlatform): string {
+      if (platform === "qq" && qqStore) {
+        return normalizeCookie(qqStore.load()?.cookie ?? "");
+      }
       const filePath = path.join(cookieDir, `${platform}.json`);
       if (!fs.existsSync(filePath)) return "";
       let stored: string;
