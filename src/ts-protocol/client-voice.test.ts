@@ -1,34 +1,77 @@
+import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { Client as SDKClient, type ResolvedAddr } from "@honeybbq/teamspeak-client";
-import { Resolver } from "@honeybbq/teamspeak-client/discovery";
+import { Resolver, type Client as SDKClient, type ClientOptions as SDKClientOptions, type ResolvedAddr } from "@honeybbq/teamspeak/client";
 import { TS3Client, type TS3VoiceSendFailure } from "./client.js";
 import type { TrackingVoiceEndpointResolver } from "./voice-endpoint.js";
 import type { Logger } from "../logger.js";
 
+class FakeSdkClient extends EventEmitter {
+  clientID = 0;
+  channelID = 1n;
+  uid = "fake-uid";
+  readonly addr: string;
+  readonly options: SDKClientOptions;
+
+  constructor(addr: string, options: SDKClientOptions) {
+    super();
+    this.addr = addr;
+    this.options = options;
+  }
+
+  async connect(): Promise<void> {
+    this.clientID = 42;
+  }
+
+  async disconnect(): Promise<void> {
+    this.emit("disconnected", { error: undefined, willReconnect: false });
+  }
+
+  async send(_request: { command: string; params?: Record<string, unknown> }): Promise<Record<string, string>[]> {
+    return [];
+  }
+
+  sendVoice(_data: Uint8Array, _codec: number): void {}
+
+  emitDisconnected(error?: Error): void {
+    this.emit("disconnected", { error, willReconnect: false });
+  }
+}
+
 type Failure = TS3VoiceSendFailure;
-type Harness = { client: SDKClient | null; voiceFramesSent: number };
+type Harness = { client: FakeSdkClient | null; voiceFramesSent: number };
 
 describe("TS3Client voice send failure lifecycle", () => {
   let client: TS3Client;
-  let sdk: SDKClient;
+  let sdk: FakeSdkClient;
   let logger: Logger;
   let records: Array<{ level: string; args: unknown[] }>;
+  let onCreateSdk: ((sdk: FakeSdkClient) => void) | undefined;
+
+  const createClient = (extra: Partial<ConstructorParameters<typeof TS3Client>[0]> = {}) =>
+    new TS3Client(
+      {
+        host: "localhost",
+        port: 9987,
+        queryPort: 10011,
+        nickname: "VoiceTest",
+        serverProtocol: "ts3",
+        sdkClientFactory: (_identity, addr, _nickname, sdkOptions) => {
+          const fake = new FakeSdkClient(addr, sdkOptions);
+          onCreateSdk?.(fake);
+          return fake as unknown as SDKClient;
+        },
+        ...extra,
+      },
+      logger,
+    );
 
   beforeEach(async () => {
     vi.useFakeTimers();
-    // Keep the real SDK object, logger bridge and event dispatch. Replace only
-    // its network handshake and explicit shutdown so no UDP socket is opened.
-    vi.spyOn(SDKClient.prototype, "connect").mockImplementation(async function (this: SDKClient) {
-      this.clid = 42;
-      this._markConnected();
-    });
-    vi.spyOn(SDKClient.prototype, "disconnect").mockImplementation(async function (this: SDKClient) {
-      this.handler.onClosed?.(null);
-    });
     records = [];
+    onCreateSdk = undefined;
     const capture = (level: string) => (...args: unknown[]) => records.push({ level, args });
     logger = { info: capture("info"), warn: capture("warn"), error: capture("error"), debug() {} } as unknown as Logger;
-    client = new TS3Client({ host: "localhost", port: 9987, queryPort: 10011, nickname: "VoiceTest", serverProtocol: "ts3" }, logger);
+    client = createClient();
     await client.connect();
     sdk = (client as unknown as Harness).client!;
   });
@@ -40,26 +83,22 @@ describe("TS3Client voice send failure lifecycle", () => {
     vi.useRealTimers();
   });
 
-  it("keeps activity events while forwarding copied Opus only with recognition enabled", async () => {
+  it("keeps activity events while forwarding copied Opus only with recognition enabled", () => {
     const activity = vi.fn();
     const recognition = vi.fn();
     client.on("voiceActivity", activity);
     client.on("voiceData", recognition);
-    const packet = Uint8Array.of(0, 0, 0, 43, 4, 1, 2);
-    async function receiveVoice() {
-      sdk.handler.onPacket?.({ typeFlagged: 0, id: 1, clientID: 0, generationID: 0, data: packet, receivedAt: Date.now() });
-      await vi.advanceTimersByTimeAsync(0);
-    }
-    await receiveVoice();
+    const packet = { clientID: 43, codec: 4, data: Uint8Array.of(1, 2) };
+    sdk.emit("voiceData", packet);
     expect(activity).toHaveBeenCalledWith({ clientId: 43, codec: 4 });
     expect(recognition).not.toHaveBeenCalled();
 
     client.setVoiceDataEnabled(true);
-    await receiveVoice();
-    packet[5] = 9;
+    sdk.emit("voiceData", packet);
+    packet.data[0] = 9;
     expect(recognition).toHaveBeenCalledWith({ clientId: 43, codec: 4, data: Buffer.from([1, 2]) });
     client.setVoiceDataEnabled(false);
-    await receiveVoice();
+    sdk.emit("voiceData", packet);
     expect(recognition).toHaveBeenCalledTimes(1);
     expect(activity).toHaveBeenCalledTimes(3);
   });
@@ -165,7 +204,7 @@ describe("TS3Client voice send failure lifecycle", () => {
     client.sendVoiceData(Buffer.from([1]));
     send.mockImplementation(() => { throw { code: "EPIPE" }; });
     client.sendVoiceData(Buffer.from([1]));
-    sdk.handler.onClosed?.(new Error("synthetic connection loss"));
+    sdk.emitDisconnected(new Error("synthetic connection loss"));
     await vi.advanceTimersByTimeAsync(3000);
     expect(terminal).toEqual([]);
     expect((client as unknown as Harness).voiceFramesSent).toBe(0);
@@ -176,22 +215,21 @@ describe("TS3Client voice send failure lifecycle", () => {
 
   it("does not revive a connection whose handshake was cancelled", async () => {
     let finishHandshake!: () => void;
-    vi.spyOn(SDKClient.prototype, "connect").mockImplementationOnce(function (this: SDKClient) {
-      return new Promise<void>(resolve => {
+    onCreateSdk = (fake) => {
+      vi.spyOn(fake, "connect").mockImplementationOnce(() => new Promise<void>(resolve => {
         finishHandshake = () => {
-          this.clid = 99;
-          this._markConnected();
+          fake.clientID = 99;
           resolve();
         };
-      });
-    });
+      }));
+    };
     const connected = vi.fn();
     client.on("connected", connected);
     const pending = client.connect();
     await Promise.resolve();
     expect(finishHandshake).toBeTypeOf("function");
     const connectingSdk = (client as unknown as Harness).client!;
-    const close = vi.spyOn(connectingSdk.handler, "close");
+    const close = vi.spyOn(connectingSdk, "disconnect");
     const send = vi.spyOn(connectingSdk, "sendVoice");
     client.disconnect();
     finishHandshake();
@@ -212,7 +250,7 @@ describe("TS3Client voice send failure lifecycle", () => {
     await client.connect();
     // Old disconnect dispatch is queued; old socket callbacks may follow it.
     const before = records.length;
-    sdk.logger.warn("udp send error", Object.assign(new Error("credential-secret"), { code: "ECONNREFUSED" }));
+    sdk.options.logger?.warn?.("udp send error", Object.assign(new Error("credential-secret"), { code: "ECONNREFUSED" }));
     await vi.advanceTimersByTimeAsync(3000);
     expect(client.getClientId()).toBe(42);
     expect(records.slice(before).filter(record => record.level === "warn")).toEqual([]);
@@ -222,28 +260,44 @@ describe("TS3Client voice send failure lifecycle", () => {
   it("does not let an older named-channel lookup move the replacement connection", async () => {
     client.disconnect();
     await vi.advanceTimersByTimeAsync(0);
-    client = new TS3Client({ host: "localhost", port: 9987, queryPort: 10011, nickname: "VoiceTest", serverProtocol: "ts3", defaultChannel: "Music" }, logger);
+    client = createClient({ defaultChannel: "Music" });
     let nextClientId = 101;
-    vi.mocked(SDKClient.prototype.connect).mockImplementation(async function (this: SDKClient) {
-      this.clid = nextClientId++;
-      this._markConnected();
-    });
     let finishOlderLookup!: (rows: Record<string, string>[]) => void;
-    vi.spyOn(SDKClient.prototype, "execCommandWithResponse").mockImplementation(function (this: SDKClient) {
-      if (this.clid === 101) return new Promise(resolve => { finishOlderLookup = resolve; });
-      return Promise.resolve([{ cid: "20", channel_name: "Music" }]);
-    });
-    const moves: Array<{ clientId: number; command: string }> = [];
-    vi.spyOn(SDKClient.prototype, "execCommand").mockImplementation(async function (this: SDKClient, command: string) {
-      moves.push({ clientId: this.clid, command });
-    });
+    const moves: Array<{ clientId: number; command: string; params: Record<string, unknown> | undefined }> = [];
+    onCreateSdk = (fake) => {
+      vi.spyOn(fake, "connect").mockImplementation(async () => {
+        fake.clientID = nextClientId++;
+      });
+      vi.spyOn(fake, "send").mockImplementation(async (req) => {
+        if (req.command === "channellist") {
+          if (fake.clientID === 101) {
+            return new Promise(resolve => { finishOlderLookup = resolve; });
+          }
+          return [{ cid: "20", channel_name: "Music", pid: "0", channel_order: "0" }];
+        }
+        if (req.command === "clientmove") {
+          moves.push({ clientId: fake.clientID, command: req.command, params: req.params });
+        }
+        return [];
+      });
+    };
     const first = client.connect();
     for (let i = 0; i < 8; i++) await Promise.resolve();
     expect(finishOlderLookup).toBeTypeOf("function");
     await client.connect();
-    finishOlderLookup([{ cid: "10", channel_name: "Music" }]);
+    finishOlderLookup([{ cid: "10", channel_name: "Music", pid: "0", channel_order: "0" }]);
     await first;
-    expect(moves).toEqual([{ clientId: 102, command: "clientmove clid=102 cid=20" }]);
+    expect(moves).toEqual([
+      {
+        clientId: 102,
+        command: "clientmove",
+        params: [
+          ["clid", 102],
+          ["cid", 20n],
+          ["cpw", undefined],
+        ],
+      },
+    ]);
     expect(records.filter(record => record.args[1] === "Joined channel").map(record => record.args[0])).toEqual([{ channelName: "Music", cid: "20" }]);
     expect(client.getClientId()).toBe(102);
   });
@@ -254,13 +308,14 @@ describe("TS3Client voice send failure lifecycle", () => {
     vi.spyOn(Resolver.prototype, "resolve").mockImplementationOnce(() => new Promise(resolve => { finishOlderResolution = resolve; }))
       .mockResolvedValue([row("192.0.2.2:9987")]);
     let sequence = 0;
-    vi.mocked(SDKClient.prototype.connect).mockImplementation(async function (this: SDKClient) {
-      const clientId = 101 + sequence++;
-      const resolver = (client as unknown as { voiceEndpointResolver: TrackingVoiceEndpointResolver }).voiceEndpointResolver;
-      await resolver.resolve("voice.test:9987");
-      this.clid = clientId;
-      this._markConnected();
-    });
+    onCreateSdk = (fake) => {
+      vi.spyOn(fake, "connect").mockImplementation(async () => {
+        const clientId = 101 + sequence++;
+        const resolver = (client as unknown as { voiceEndpointResolver: TrackingVoiceEndpointResolver }).voiceEndpointResolver;
+        await resolver.resolve("voice.test:9987");
+        fake.clientID = clientId;
+      });
+    };
     const first = client.connect();
     for (let i = 0; i < 8; i++) await Promise.resolve();
     expect(finishOlderResolution).toBeTypeOf("function");
@@ -273,12 +328,20 @@ describe("TS3Client voice send failure lifecycle", () => {
   });
 
   it.each(["10", "Music"])("does not report an old %s channel move after connection replacement", async channel => {
-    vi.spyOn(SDKClient.prototype, "execCommandWithResponse").mockResolvedValue([{ cid: "10", channel_name: "Music" }]);
     let finishMove!: () => void;
-    const move = vi.spyOn(sdk, "execCommand").mockImplementation(() => new Promise<void>(resolve => { finishMove = resolve; }));
+    const moveSpy = vi.fn(() => new Promise<void>(resolve => { finishMove = resolve; }));
+    vi.spyOn(sdk, "send").mockImplementation(async (req) => {
+      if (req.command === "channellist") {
+        return [{ cid: "10", channel_name: "Music", pid: "0", channel_order: "0" }];
+      }
+      if (req.command === "clientmove") {
+        await moveSpy();
+      }
+      return [];
+    });
     const joining = client.joinChannel(channel);
     for (let i = 0; i < 8; i++) await Promise.resolve();
-    expect(move).toHaveBeenCalledWith("clientmove clid=42 cid=10", 10000);
+    expect(moveSpy).toHaveBeenCalledTimes(1);
     await client.connect();
     finishMove();
     await joining;
@@ -287,7 +350,7 @@ describe("TS3Client voice send failure lifecycle", () => {
 
   it("does not report a stale channel lookup failure against the new connection", async () => {
     let failLookup!: (error: Error) => void;
-    vi.spyOn(sdk, "execCommandWithResponse").mockImplementation(() => new Promise((_resolve, reject) => { failLookup = reject; }));
+    vi.spyOn(sdk, "send").mockImplementation(() => new Promise((_resolve, reject) => { failLookup = reject; }));
     const joining = client.joinChannel("Music");
     await client.connect();
     failLookup(new Error("old credential-secret failure"));
@@ -299,7 +362,7 @@ describe("TS3Client voice send failure lifecycle", () => {
   it("keeps safe async UDP error detail while throttling without terminalizing it", async () => {
     const terminal: Failure[] = [];
     client.on("voiceSendFailed", event => terminal.push(event));
-    for (let i = 0; i < 100; i++) sdk.logger.warn("udp send error", Object.assign(new Error("credential-secret"), { code: "ECONNREFUSED" }));
+    for (let i = 0; i < 100; i++) sdk.options.logger?.warn?.("udp send error", Object.assign(new Error("credential-secret"), { code: "ECONNREFUSED" }));
     await vi.advanceTimersByTimeAsync(2000);
     const warnings = records.filter(record => record.level === "warn");
     expect(warnings).toHaveLength(2);
@@ -310,7 +373,7 @@ describe("TS3Client voice send failure lifecycle", () => {
   });
 
   it("discards unsafe async UDP codes and cancels their summary on disconnect", async () => {
-    sdk.logger.warn("udp send error", { code: "credential-secret", message: "credential-secret" });
+    sdk.options.logger?.warn?.("udp send error", { code: "credential-secret", message: "credential-secret" });
     client.disconnect();
     await vi.advanceTimersByTimeAsync(3000);
     expect(records.filter(record => record.level === "warn").filter(record => String(record.args[1]).includes("udp send error"))).toHaveLength(1);

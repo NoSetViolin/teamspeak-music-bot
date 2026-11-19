@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { Logger } from "../logger.js";
 import type { QrCodeResult } from "./provider.js";
+import { normalizeCookie } from "./cookie-normalize.js";
 import { hasQqRenewalMaterial, parseQqCredential, qqPlaybackCookie, type QqCredential, type QqLoginClient, type QqPollResult } from "./qq-login.js";
 
 interface QqSessionRecord {
@@ -31,24 +32,40 @@ function expiryTime(credential: QqCredential): number | undefined {
   return timestamp((credential.musickeyCreateTime + credential.keyExpiresIn) * 1000);
 }
 
-export function createQqSessionStore(file: string) {
+export function createQqSessionStore(file: string, legacyFile?: string) {
+  function loadLegacy(newerThan = -Infinity): QqSessionRecord | undefined {
+    if (!legacyFile) return;
+    try {
+      if (fs.statSync(legacyFile).mtimeMs <= newerThan) return;
+      const { cookie } = JSON.parse(fs.readFileSync(legacyFile, "utf8"));
+      const clean = typeof cookie === "string" ? normalizeCookie(cookie) : "";
+      if (clean) return { cookie: clean };
+    } catch { /* The legacy cookie is missing or unreadable. */ }
+  }
+
   return {
     load(): QqSessionRecord | undefined {
       let raw: string;
       try {
         raw = fs.readFileSync(file, "utf8");
       } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
+        if ((err as NodeJS.ErrnoException).code === "ENOENT") return loadLegacy();
         throw err;
       }
       const data = JSON.parse(raw);
       if (data?.version !== 1 || typeof data.cookie !== "string") throw new Error("Invalid QQ session record");
+      // Before the stores were shared, a newer login could be in the legacy file.
+      if (data.shared !== true && legacyFile) {
+        const legacy = loadLegacy(fs.statSync(file).mtimeMs);
+        if (legacy) return legacy;
+      }
       const credential = parseQqCredential(data.credential);
-      if (data.credential && (!credential || qqPlaybackCookie(credential) !== data.cookie)) {
+      const cookie = normalizeCookie(data.cookie);
+      if (data.credential && (!credential || qqPlaybackCookie(credential) !== cookie)) {
         throw new Error("Invalid QQ session credential");
       }
       return {
-        cookie: data.cookie,
+        cookie,
         credential,
         reauthRequired: data.reauthRequired === true,
         authorizedAt: timestamp(data.authorizedAt),
@@ -58,7 +75,7 @@ export function createQqSessionStore(file: string) {
     save(data: QqSessionRecord): void {
       const temp = path.join(path.dirname(file), `.qq-session-${randomUUID()}.tmp`);
       try {
-        fs.writeFileSync(temp, JSON.stringify({ version: 1, ...data }), {
+        fs.writeFileSync(temp, JSON.stringify({ version: 1, shared: true, ...data, cookie: normalizeCookie(data.cookie) }), {
           encoding: "utf8", mode: 0o600, flag: "wx", flush: true,
         });
         fs.renameSync(temp, file);
@@ -94,10 +111,10 @@ export class QQManagedSession {
     private readonly client: QqLoginClient,
     private readonly store: ReturnType<typeof createQqSessionStore>,
     private readonly logger: Logger,
-    legacyCookie: string,
   ) {
     try {
-      this.state = store.load() ?? { cookie: legacyCookie };
+      const saved = store.load();
+      if (saved) this.state = saved;
     } catch {
       logger.warn("Could not read QQ managed session");
     }
@@ -122,7 +139,7 @@ export class QQManagedSession {
   }
 
   setCookie(cookie: string): void {
-    this.replace({ cookie });
+    this.replace({ cookie: normalizeCookie(cookie) });
     this.qrGeneration++;
     this.qr = undefined;
   }

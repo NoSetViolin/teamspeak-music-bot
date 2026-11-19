@@ -105,12 +105,12 @@ npm start
 
 ### 方式三：Docker 一键部署
 
-所有依赖已内置（Node.js、FFmpeg、Opus 编码器），无需安装任何额外软件。
+需要 Docker 和 Docker Compose v2。默认从 GitHub Container Registry（GHCR）拉取预构建镜像，镜像已包含 Node.js、FFmpeg 和 Opus 编码器。
 
 ```bash
 git clone https://github.com/ZHANGTIANYAO1/teamspeak-music-bot.git
 cd teamspeak-music-bot/scripts/docker
-docker-compose up -d
+docker compose up -d
 ```
 
 打开浏览器访问 **http://localhost:3000**
@@ -118,15 +118,14 @@ docker-compose up -d
 <details>
 <summary>Docker 详细说明</summary>
 
-- 首次构建需要几分钟（编译原生模块）
 - 默认使用 `host` 网络模式，机器人可直接连接局域网 TS3 服务器
 - 数据持久化在 Docker 命名卷 `tsmusicbot-data` 中（数据库、Cookie、日志）
 - 内置健康检查（`/api/health`），支持 Docker 自动重启
 
 ```bash
 docker logs -f tsmusicbot          # 查看日志
-docker-compose down                # 停止
-docker-compose up -d --build       # 代码更新后重新构建
+docker compose down                # 停止
+docker compose pull && docker compose up -d   # 更新预构建镜像
 ```
 
 如果 TS3 服务器在其他机器上，编辑 `docker-compose.yml`：
@@ -137,6 +136,36 @@ ports:
 ```
 
 </details>
+
+#### 无法访问 GHCR 时部署
+
+**离线导入发布镜像。** 在能访问 GHCR 的机器上拉取项目官方发布镜像并导出。下面以 `1.15.4` 和 `linux/amd64` 为例，请选择所需发布版本以及部署服务器的架构（`linux/amd64` 或 `linux/arm64`）。Git 发布标签带 `v`，镜像标签不带 `v`。
+
+```bash
+image=ghcr.io/zhangtianyao1/teamspeak-music-bot:1.15.4
+docker pull --platform linux/amd64 "$image"
+docker image save -o tsmusicbot-1.15.4.tar "$image"
+```
+
+将归档和同版本的 `scripts/docker/docker-compose.yml` 复制到部署服务器。在 Compose 文件中把 `image:` 改为上面导入的完整镜像名和标签，然后在该文件所在目录运行：
+
+```bash
+docker image load -i tsmusicbot-1.15.4.tar
+docker compose config --images
+docker compose up -d --pull never
+```
+
+升级时导入新版本的镜像并更新 `image:` 的标签，再在同一部署目录运行启动命令，以继续使用现有的数据卷。
+
+**从发布源码本地构建。** 若部署机可以访问构建依赖但无法访问 GHCR，可下载或克隆对应发布标签的源码。在 `scripts/docker/docker-compose.yml` 中把 `image:` 替换成下列配置，保持它位于 `services.tsmusicbot` 下：
+
+```yaml
+    build:
+      context: ../..
+      dockerfile: scripts/docker/Dockerfile
+```
+
+进入源码的 `scripts/docker` 目录，运行 `docker compose up -d --build`。构建需要获取 `node:22-slim` 基础镜像，以及 Dockerfile 使用的 apt、npm 和原生依赖下载源。升级时切换到所需的新发布标签并重新构建。
 
 ### 方式四：Linux 安装脚本
 
@@ -304,11 +333,8 @@ npm start
 ```bash
 cd scripts/docker
 
-# 拉取最新代码
-git pull
-
-# 重新构建并启动（数据自动保留）
-docker-compose up -d --build
+# 拉取预构建镜像并重新启动
+docker compose pull && docker compose up -d
 ```
 
 > 数据（数据库、Cookie、日志）保存在 Docker 命名卷 `tsmusicbot-data` 中，更新不会丢失。
@@ -355,7 +381,13 @@ QQ 音源启用时，`QQ_MUSIC_MANAGED_SESSION` 默认为 `1`。在 **设置 →
 
 已有 `cookies/qq.json` 可继续播放，扫码授权后才会获得续期所需的凭据。手动导入 Cookie 会替换当前登录并取消该账号的自动续期。设置页会显示上次成功续期时间、下次续期时间、重试状态或重新扫码提示。具备平台登录权限的用户也可以调用 `POST /api/auth/qq/refresh` 手动尝试续期。
 
-设置 `QQ_MUSIC_MANAGED_SESSION=0` 并重启可关闭自动续期并使用原来的 `qq.json`。
+设置 `QQ_MUSIC_MANAGED_SESSION=0` 并重启可关闭自动续期。机器人继续使用当前的 QQ 播放 Cookie，并从 `cookies/qq.json` 兼容读取旧部署的 Cookie。
+
+### 每用户音乐账号
+
+管理员可在设置中开启「每个成员使用自己的音乐账号」，默认关闭。成员可扫码绑定自己的网易云，也可接受管理员分配的网易云、QQ 音乐、酷狗或 B 站账号。网页搜索、歌单和推荐默认优先使用自己的绑定，其次使用分配账号，最后使用机器人共享账号。成员也可在「我的音乐账号」中主动选择共享账号。房间播歌使用机器人共享账号。
+
+从共享账号导入时，账号池保存当前 Cookie 的副本。共享账号续期或更换后，管理员可在账号池中更新该条目的 Cookie。
 
 ### WebUI 页面说明
 
@@ -599,7 +631,7 @@ teamspeak-music-bot/
 | **后端框架** | Express 4, WebSocket (ws) |
 | **数据库** | better-sqlite3 (SQLite) |
 | **音频处理** | FFmpeg (ffmpeg-static 内置), @discordjs/opus |
-| **TS 协议** | @honeybbq/teamspeak-client（完整客户端协议）+ 自研 TS6 协议适配层 |
+| **TS 协议** | @honeybbq/teamspeak（TS3 / TS6 完整客户端协议，支持 OpenProtocol v1） |
 | **Jellyfin** | Jellyfin REST API（可选音源，直连，无额外 npm 依赖） |
 | **网易云 API** | NeteaseCloudMusicApi |
 | **QQ 音乐 API** | @sansenjian/qq-music-api（锁定 `~2.4.0`，需 Node ≥ 20.17） |
@@ -881,6 +913,10 @@ OAuth 相关端点：`/api/spotify/login`、`/api/spotify/callback`、`/api/spot
 
 ## 常见问题
 
+**点歌时提示网易云 `-460` 或酷狗 `20028` 怎么办？**
+
+网易云 `-460` 表示上游拒绝本次取流，可稍后用同一首歌重试。酷狗 `20028` 表示平台要求验证，请在酷狗检查账号状态。自动切歌时，机器人会在本次切歌中跳过要求验证或已限制请求的音源，并尝试队列里的其他音源。反馈时提供机器人版本、音源、歌曲 ID、时间点和错误码即可。
+
 **Q：支持 TeamSpeak 6 Server 吗？**
 A：支持。本项目内置 TS3/TS6 双协议支持，连接时会自动检测服务器类型。如果自动检测失败（例如 Query 端口被防火墙屏蔽），可以在创建机器人时手动指定 `serverProtocol: "ts6"`。TS6 Server 的 HTTP Query API（端口 10080）也已适配，需要时可配置 `ts6ApiKey`。
 
@@ -903,7 +939,7 @@ A：使用 `!move <频道名>` 命令，或在设置页面创建机器人时指�
 A：可以。在设置页面创建多个实例，分别连接不同的 TS 服务器或频道。
 
 **Q：端口 3200 被占用？**
-A：QQ 音乐 API 启动时会监听 `config.json` 里的 `qqMusicApiPort`（默认 **3200**），客户端也用同一个端口发请求，二者始终一致。如果之前的进程还在运行，程序会自动复用。如需改端口，改 `qqMusicApiPort` 后重启即可；如需重启可手动结束 `node` 进程。
+A：QQ 音乐 API 使用 `config.json` 的 `qqMusicApiPort`（默认 **3200**）。程序会验证已在该端口监听的 QQ 音乐 API，再复用它。如果端口被 WebUI、端口转发或其他服务占用，请将 `qqMusicApiPort` 改为另一个空闲端口并重启。
 
 **Q：日志里 `baseURL` 是 3200，但 QQ API 实际监听在 3300？（二维码不弹）**
 A：这是**旧版本**（或过期的 `latest` Docker 镜像）才有的问题：早期实现用的上游包默认端口是 3300，而客户端 `baseURL` 已经是 3200，两边对不上，取二维码时就 `ECONNREFUSED 127.0.0.1:3200`。当前版本已把内嵌 QQ 音乐 API **强制绑定到 `qqMusicApiPort`（默认 3200）**，并在启动前把上游包读取的 `PORT` 环境变量对齐到该端口，二者不可能再错位。修复方法：**拉取最新镜像并重启**（`docker compose pull && docker compose up -d`），或用 `npm ci && npm run build` 更新到最新代码。启动后可在日志里确认那行 `QQ Music API started`，其 `port` 字段就是实际监听端口。
@@ -931,7 +967,7 @@ A：B站搜索需要 buvid3 匿名 Cookie（程序启动时自动获取）。如
 A：YouTube 是可选音源，需要手动安装 `yt-dlp`。详见 [可选：YouTube 音源](#可选youtube-音源) 章节。快速验证：在项目根目录执行 `bin/yt-dlp --version`（或系统 `yt-dlp --version`），能打印版本号即可。若 yt-dlp 已安装但仍搜索失败，通常是网络/地域问题或 yt-dlp 版本过旧（执行 `yt-dlp -U` 升级）。
 
 **Q：如何更新到新版本？**
-A：`git pull` 拉取最新代码，然后 `npm install && npm run build && npm start` 重新构建启动。Docker 用户执行 `docker-compose up -d --build`。
+A：`git pull` 拉取最新代码，然后 `npm install && npm run build && npm start` 重新构建启动。使用预构建镜像的 Docker 用户执行 `docker compose pull && docker compose up -d`，离线导入或本地构建用户按各自的部署步骤升级。
 
 **Q：忘记管理员密码怎么办？**
 A：直接操作 SQLite 数据库。最简单的办法是清空 `users` 表然后重新进入 first-run 流程：`sqlite3 data/tsmusicbot.db "DELETE FROM users; DELETE FROM sessions;"`，重启后浏览器会自动跳转 `/first-run` 让你重新创建管理员。详细方法见 [从 WebUI 无鉴权版本升级](#从-webui-无鉴权版本升级重要)。
@@ -969,7 +1005,31 @@ A：本项目内置 `/login` 限流（每 IP 每分钟 5 次），但生产部�
 
 > 完整历史请查看 [git log](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/commits/main) 或 [Releases](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/releases)。这里只列出重要变更和面向用户的破坏性改动。
 
-### 最新版本 — v1.15.2：长视频续播与语音发送故障处理
+### 最新版本 — v1.16.1 播放、续播与队列修复
+
+- B 站长视频中断后优先尝试其他 CDN。网易云、QQ 音乐和酷狗的完整曲目提前断流时，机器人会在有限次数内刷新地址，从已播位置续播。停止、切歌和断开连接会取消旧曲目的恢复。
+- 网页加载空歌单、预检失败或选择无效队列位置时会保留原播放。进度条会跟随实际音频进度，切歌失败会显示原因。更新机器人头像时结束的短曲也能正常推进队列。
+- QQ 音乐使用内嵌 API 支持的歌曲 MID 和音质参数。批量预检会区分上游错误与确实不可播的曲目，启动时也会识别 QQ 端口被其他服务占用。酷狗要求验证时会显示平台错误码。
+- 机器人只会因听众进入自己所在的频道而恢复自动暂停的播放。混合队列遇到音源限制时，会继续尝试其他音源。
+
+### v1.16.0：播放可靠性、音乐账号与 OpenProtocol
+
+- **播放恢复**：临时取流失败会按上限重试，支持的音源可尝试更低音质。`playUrlRetries` 默认为 2，可设为 0–5，设为 0 时关闭重试。切歌、停止或断线会取消旧请求。网易云返回上游限制时会提示具体类型，并停止同一来源的连续重试。网易云播放请求的 User-Agent 与登录客户端配置一致。 [#185](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/pull/185) · [#190](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/pull/190)
+- **B 站**：点播链接保留分 P 参数，修复部分 CDN 的 403。 [#191](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/pull/191)
+- **音乐登录**：支持多行 `Set-Cookie` 导入及 QQ 扫码会话自动续期。启用网页个人音乐账号后，搜索、歌单和推荐可使用个人登录或管理员分配的账号；房间语音播放使用共享账号。 [#184](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/pull/184) · [#188](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/pull/188) · [#186](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/pull/186)
+- **网页播放历史**：有权限的用户可按机器人单条删除、批量删除或清空历史。 [#182](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/pull/182)
+- **TeamSpeak**：新增 OpenProtocol v1 命令发现和结构化回复，更新 TS3/TS6 客户端 SDK，补齐音频淡入淡出的回归测试。 [#194](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/pull/194) · [#178](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/pull/178)
+- **隐私与部署**：音乐 API 请求失败时，日志保留诊断码并省略请求和响应数据；Docker 文档新增官方镜像离线导入和按版本标签本地构建的步骤。 [#197](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/pull/197) · [#196](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/pull/196)
+
+### v1.15.4：播放控制淡入淡出
+
+- 暂停、恢复、切歌和停止时使用音量渐变，减少操作时的爆音。 [#177](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/pull/177)
+
+### v1.15.3：设置和外观偏好
+
+- 重整设置页，并同步账号的界面外观偏好。 [#176](https://github.com/ZHANGTIANYAO1/teamspeak-music-bot/pull/176)
+
+### v1.15.2：长视频续播与语音发送故障处理
 
 - 修复播放停滞的误判：一帧音频成功发送后，即使缓冲恰好被读空，也会重置断流计数。真实断流仍保留超时检测。
 - B站 CDN 按实际域名识别，补齐 `szbdyd.com` 等回退节点的请求头和断点定位，避免续播时从头下载、解码长视频。
@@ -1262,7 +1322,7 @@ A：本项目内置 `/login` 限流（每 IP 每分钟 5 次），但生产部�
 | [NeteaseCloudMusicApi](https://github.com/Binaryify/NeteaseCloudMusicApi) | 网易云音乐 API 项目 |
 | [QQMusicApi](https://github.com/jsososo/QQMusicApi) | QQ 音乐 API 项目 |
 | [@sansenjian/qq-music-api](https://github.com/sansenjian/qq-music-api) | QQ 音乐 API 活跃维护版本 |
-| [@honeybbq/teamspeak-client](https://www.npmjs.com/package/@honeybbq/teamspeak-client) | TS3 完整客户端协议实现 |
+| [@honeybbq/teamspeak](https://www.npmjs.com/package/@honeybbq/teamspeak) | TS3 / TS6 完整客户端协议实现 |
 | [bilibili-API-collect](https://github.com/SocialSisterYi/bilibili-API-collect) | 哔哩哔哩 API 文档 |
 | [MakcRe/KuGouMusicApi](https://github.com/MakcRe/KuGouMusicApi) | 酷狗音乐 API 参考（请求签名 / KRC 歌词解码 / 设备注册移植来源，MIT 许可） |
 
