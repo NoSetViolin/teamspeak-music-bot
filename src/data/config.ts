@@ -65,6 +65,7 @@ export interface VoiceRequestConfig {
   enabled: boolean;
   /** Voiceprint recognition is the default wake mechanism. */
   mode: VoiceWakeMode;
+  semanticFallback?: boolean;
 }
 
 /**
@@ -469,6 +470,7 @@ export function loadConfig(path: string): BotConfig {
     const voiceRequest: VoiceRequestConfig = {
       enabled: partial.voiceRequest?.enabled === true,
       mode: partial.voiceRequest?.mode === "keyword" ? "keyword" : "voiceprint",
+      ...(partial.voiceRequest?.semanticFallback === true ? { semanticFallback: true } : {}),
     };
 
     // defaultPlatform → an explicit operator default (issue #126). Keep it only

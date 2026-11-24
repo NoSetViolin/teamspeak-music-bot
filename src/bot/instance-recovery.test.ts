@@ -59,6 +59,7 @@ function makeBot() {
     localProvider: {}, voiceDucking: { reset: vi.fn(), removeSpeaker: vi.fn() },
     voiceRequest: { setEnabled: vi.fn(), stop: vi.fn(), removeSpeaker: vi.fn(), cancel: vi.fn() },
     voiceClientNames: new Map(),
+    pendingVoiceCommands: new Map(),
     managedVoiceClients: new ManagedVoiceClientRegistry(),
     configuredVoiceServerScope: { host: "localhost", voicePort: 9987 },
     profileManager: { onConnect: vi.fn(), onChannelMoved: vi.fn(async () => {}) },

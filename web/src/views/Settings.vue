@@ -891,7 +891,7 @@
       <label class="profile-toggle behavior-toggle">
         <div class="profile-toggle-text">
           <div class="profile-toggle-label">频道语音点歌</div>
-          <div class="profile-toggle-hint">先在下方网页录制“布鲁斯布鲁斯”完成声纹学习。之后在 TeamSpeak 先说唤醒词，听到提示音再说“播放／点歌＋歌名”、或说“暂停”“继续”“上一首”“下一首”。支持多人，默认关闭。</div>
+          <div class="profile-toggle-hint">先在下方录制声纹。在 TeamSpeak 说“布鲁斯布鲁斯”，听到提示音后说一条指令，例如“放首晴天”“把晴天加到队尾”“这首跳过吧”或“现在这首叫什么”。支持多人，默认关闭。</div>
           <div v-if="!voiceRequestModelsReady" class="profile-toggle-hint">模型未安装：在服务端运行 npm run setup:voice 后刷新页面。</div>
           <div v-if="voiceRequestMessage" class="profile-toggle-hint" role="status">{{ voiceRequestMessage }}</div>
         </div>

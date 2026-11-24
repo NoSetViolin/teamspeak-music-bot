@@ -109,7 +109,7 @@ export class VoiceRequestController {
         this.activeSpeaker = message.id;
         this.callbacks.onWake(message.id, message.profileName);
       } else if (message.type === "result" && message.id) {
-        if (this.activeSpeaker !== null && this.activeSpeaker !== message.id) return;
+        if (this.activeSpeaker !== message.id) return;
         this.activeSpeaker = null;
         this.callbacks.onResult(message.id, message.text ?? "", message.profileName);
       } else if (message.type === "failure" && message.id) {
@@ -205,21 +205,4 @@ export class VoiceRequestController {
   isReady(): boolean {
     return this.ready;
   }
-}
-
-export type VoiceCommand = { name: "play"; query: string } | { name: "pause" | "resume" | "prev" | "next" };
-
-/** Parse a single spoken command after a successful voiceprint match. */
-export function parseVoiceCommand(transcript: string): VoiceCommand | null {
-  const clean = transcript.replace(/<\|[^|]*\|>/g, "").trim()
-    .replace(/^布鲁斯[，,、\s]*布鲁斯[，,。！!？?\s]*/u, "")
-    .replace(/[。！？!?，,]+$/u, "").trim();
-  if (clean === "暂停") return { name: "pause" };
-  if (clean === "继续") return { name: "resume" };
-  if (clean === "上一首") return { name: "prev" };
-  if (clean === "下一首") return { name: "next" };
-  const match = clean.match(/^(?:请|帮我|给我|我要|我想|麻烦你|你能)?\s*(?:我要听|播放|点歌|放一首|来一首|放|来)\s*(.+)$/u);
-  if (!match) return null;
-  const query = match[1].trim();
-  return query.length >= 1 && query.length <= 120 ? { name: "play", query } : null;
 }

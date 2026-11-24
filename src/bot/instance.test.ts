@@ -1936,6 +1936,7 @@ describe("voice transport commands", () => {
       connected: true,
       config: { voiceRequest: { enabled: true } },
       voiceClientNames: new Map([[42, "listener"]]),
+      pendingVoiceCommands: new Map(),
       executeCommand,
       sendVoiceRequestMessage,
     } as any;
@@ -1947,6 +1948,149 @@ describe("voice transport commands", () => {
     expect(executeCommand.mock.calls.map(([command]) => command.name)).toEqual(["pause", "resume", "prev", "next"]);
     expect(executeCommand.mock.calls[0][2]).toBe("listener");
     expect(sendVoiceRequestMessage).toHaveBeenCalledWith("🎤 Paused");
+  });
+
+  const sunny = {
+    id: "sunny", name: "晴天", artist: "周杰伦", album: "", coverUrl: "",
+    duration: 270, platform: "netease",
+  } as const;
+  const otherSunny = { ...sunny, id: "other", artist: "其他歌手" };
+  const anotherSong = { ...sunny, id: "other-song", name: "雨天" };
+
+  function voiceContext(songs: QueuedSong[] = [sunny]) {
+    const queue = new PlayQueue();
+    queue.add(anotherSong);
+    queue.add({ ...anotherSong, id: "queued" });
+    queue.play();
+    const search = vi.fn(async () => ({ songs }));
+    const getSongDetail = vi.fn(async () => sunny);
+    const ctx = Object.assign(Object.create(BotInstance.prototype), {
+      connected: true,
+      config: { voiceRequest: { enabled: true }, adminGroups: [], enabledProviders: ["netease", "qq"] },
+      lifecycleGeneration: 0,
+      pendingVoiceCommands: new Map<number, symbol>(),
+      voiceClientNames: new Map([[42, "listener"]]),
+      lastSearchResults: [anotherSong],
+      queue,
+      player: { getState: () => "playing", getVolume: vi.fn(() => 5), setVolume: vi.fn() },
+      tsClient: { getClientServerGroups: vi.fn(async () => ["6"]) },
+      database: { saveVolume: vi.fn() },
+      getProviderFor: vi.fn((platform: string) => ({ platform, search, getSongDetail })),
+      playSingleSong: vi.fn(async () => true),
+      sendVoiceRequestMessage: vi.fn(),
+      logger: { warn: vi.fn() },
+      emit: vi.fn(),
+    });
+    return { ctx, queue, search, getSongDetail, say: (text: string) => ctx.handleVoicePlayRequest(42, text) };
+  }
+
+  it("searches only the chosen source once and picks the requested singer", async () => {
+    const { ctx, search, say } = voiceContext([anotherSong, otherSunny, sunny]);
+    await say("用QQ音乐放周杰伦唱的晴天吧");
+    expect(ctx.getProviderFor).toHaveBeenCalledExactlyOnceWith("qq");
+    expect(search).toHaveBeenCalledExactlyOnceWith("晴天 周杰伦", 5);
+    expect(ctx.playSingleSong).toHaveBeenCalledWith({ ...sunny, platform: "qq" }, "listener", expect.any(Function));
+    expect(ctx.lastSearchResults).toEqual([anotherSong]);
+  });
+
+  it("plays the first matching song when multiple songs share the title", async () => {
+    const { ctx, search, say } = voiceContext([anotherSong, sunny, otherSunny]);
+    await say("现在放晴天");
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(ctx.playSingleSong).toHaveBeenCalledExactlyOnceWith(sunny, "listener", expect.any(Function));
+  });
+
+  it.each([
+    ["把晴天加到队尾", ["other-song", "queued", "sunny"]],
+    ["下一首放晴天", ["other-song", "sunny", "queued"]],
+  ] as const)("queues the first matching song for %s", async (utterance, order) => {
+    const { ctx, queue, search, say } = voiceContext([anotherSong, sunny, otherSunny]);
+    await say(utterance);
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(queue.list().map(song => song.id)).toEqual(order);
+    expect(queue.list().find(song => song.id === sunny.id)?.requestedBy).toBe("listener");
+    expect(ctx.playSingleSong).not.toHaveBeenCalled();
+  });
+
+  it("keeps an unmatched request from picking a similarly named track", async () => {
+    const { ctx, queue, search, say } = voiceContext([{ ...sunny, name: "晴天 (合唱版)" }]);
+    await say("播放周杰伦的晴天");
+    expect(search).toHaveBeenCalledTimes(1);
+    expect(ctx.playSingleSong).not.toHaveBeenCalled();
+    expect(queue.current()).toEqual(anotherSong);
+    expect(ctx.sendVoiceRequestMessage).toHaveBeenCalledWith(expect.stringContaining("没有找到匹配"));
+  });
+
+  it("preserves explicit song references without borrowing shared search results", async () => {
+    const { ctx, search, getSongDetail, say } = voiceContext();
+    await say("播放 #1");
+    expect(ctx.playSingleSong).not.toHaveBeenCalled();
+    await say("播放 https://music.163.com/song?id=123");
+    expect(search).not.toHaveBeenCalled();
+    expect(getSongDetail).toHaveBeenCalledExactlyOnceWith("123");
+    expect(ctx.playSingleSong).toHaveBeenCalledTimes(1);
+    expect(ctx.lastSearchResults).toEqual([anotherSong]);
+  });
+
+  it("rejects a disabled source before looking it up", async () => {
+    const { ctx, search, say } = voiceContext();
+    await say("在B站放晴天");
+    expect(ctx.getProviderFor).not.toHaveBeenCalled();
+    expect(search).not.toHaveBeenCalled();
+    expect(ctx.sendVoiceRequestMessage).toHaveBeenCalledWith(expect.stringContaining("音源未启用"));
+  });
+
+  it("uses the latest volume when lowering it and skips group lookup with no admin groups", async () => {
+    const { ctx, search, say } = voiceContext();
+    await say("别切歌，声音小一点");
+    expect(ctx.player.setVolume).toHaveBeenCalledExactlyOnceWith(0);
+    expect(ctx.tsClient.getClientServerGroups).not.toHaveBeenCalled();
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it("answers which song is playing without searching a source", async () => {
+    const { ctx, search, say } = voiceContext();
+    await say("现在这首叫什么");
+    expect(ctx.sendVoiceRequestMessage).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("雨天"));
+    expect(search).not.toHaveBeenCalled();
+    expect(ctx.playSingleSong).not.toHaveBeenCalled();
+  });
+
+  it("checks the speaker's live admin groups before changing volume", async () => {
+    const { ctx, search, say } = voiceContext();
+    ctx.config.adminGroups = [6];
+    await say("把声音调到百分之三十");
+    expect(ctx.tsClient.getClientServerGroups).toHaveBeenCalledExactlyOnceWith(42);
+    expect(ctx.player.setVolume).toHaveBeenCalledExactlyOnceWith(30);
+    ctx.tsClient.getClientServerGroups.mockRejectedValueOnce(new Error("lookup failed"));
+    await say("声音大一点");
+    expect(ctx.player.setVolume).toHaveBeenCalledTimes(1);
+    expect(ctx.sendVoiceRequestMessage).toHaveBeenLastCalledWith(COMMAND_DENIED_MESSAGE);
+    expect(search).not.toHaveBeenCalled();
+  });
+
+  it("uses the volume at execution time after the admin group lookup", async () => {
+    const { ctx, say } = voiceContext();
+    const groups = deferred<string[]>();
+    ctx.config.adminGroups = [6];
+    ctx.tsClient.getClientServerGroups.mockReturnValueOnce(groups.promise);
+    const pending = say("声音大一点");
+    ctx.player.getVolume.mockReturnValue(95);
+    groups.resolve(["6"]);
+    await pending;
+    expect(ctx.player.setVolume).toHaveBeenCalledExactlyOnceWith(100);
+  });
+
+  it("does not change the queue after the requesting speaker's command is canceled", async () => {
+    const { ctx, queue, search, say } = voiceContext();
+    const lookup = deferred<{ songs: QueuedSong[] }>();
+    search.mockReturnValueOnce(lookup.promise);
+    const pending = say("把晴天加到队尾");
+    ctx.pendingVoiceCommands.delete(42);
+    lookup.resolve({ songs: [sunny] });
+    await pending;
+    expect(queue.list().map(song => song.id)).toEqual(["other-song", "queued"]);
+    expect(ctx.sendVoiceRequestMessage).not.toHaveBeenCalled();
   });
 });
 
@@ -2355,6 +2499,7 @@ describe("BotInstance — OpenProtocol & command routing", () => {
       voiceDucking: { reset: vi.fn(), removeSpeaker: vi.fn(), handleVoiceActivity: vi.fn() },
       voiceRequest: { cancel: vi.fn(), removeSpeaker: vi.fn(), stop: vi.fn() },
       voiceClientNames: new Map<number, string>(),
+      pendingVoiceCommands: new Map([[5, Symbol()], [10, Symbol()]]),
       spotifyController: { stop: vi.fn() },
       player: { stop: vi.fn(), clearWakeCue: vi.fn() },
       jellyfinReporter: undefined,
@@ -2374,10 +2519,12 @@ describe("BotInstance — OpenProtocol & command routing", () => {
 
     tsClient.emit("clientMoved", { id: 5, targetChannelID: 10n });
     expect(ctx.voiceRequest.removeSpeaker).toHaveBeenCalledWith(5);
+    expect(ctx.pendingVoiceCommands.has(5)).toBe(false);
     expect(openProtocol.scheduleAnnounce).toHaveBeenCalledTimes(1);
 
     tsClient.emit("clientMoved", { id: 99, targetChannelID: 10n });
     expect(ctx.voiceRequest.cancel).toHaveBeenCalledTimes(1);
+    expect(ctx.pendingVoiceCommands.size).toBe(0);
     expect(openProtocol.scheduleAnnounce).toHaveBeenCalledTimes(2);
 
     const pluginCmd = {

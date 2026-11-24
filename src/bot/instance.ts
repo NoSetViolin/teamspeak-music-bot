@@ -51,7 +51,9 @@ import { SpotifyController } from "../music/spotify/controller.js";
 import type { SpotifyTrackEndedEvent } from "../music/spotify/backend.js";
 import type { SpotifyOAuth } from "../music/spotify/spotify-oauth.js";
 import { VoiceDuckingController } from "./voice-ducking.js";
-import { VoiceRequestController, parseVoiceCommand, type VoiceprintProfile } from "./voice-request.js";
+import { VoiceRequestController, type VoiceprintProfile } from "./voice-request.js";
+import { analyzeVoiceCommand, type VoiceSongCommand } from "./voice-command.js";
+import { inferVoiceCommand } from "./voice-intent.js";
 import {
   ManagedVoiceClientRegistry,
   type ManagedVoiceClientOwnerToken,
@@ -193,6 +195,7 @@ export class BotInstance extends EventEmitter {
   private voiceDucking: VoiceDuckingController;
   private voiceRequest: VoiceRequestController;
   private voiceClientNames = new Map<number, string>();
+  private readonly pendingVoiceCommands = new Map<number, symbol>();
   private managedVoiceClients: ManagedVoiceClientRegistry;
   private readonly configuredVoiceServerScope: ManagedVoiceClientScope;
   private voiceServerScope: ManagedVoiceClientScope;
@@ -299,6 +302,7 @@ export class BotInstance extends EventEmitter {
         void this.sendVoiceRequestMessage(`🎤 ${reason}`);
       },
       onUnavailable: (reason) => {
+        this.pendingVoiceCommands.clear();
         this.tsClient.setVoiceDataEnabled(false);
         void this.sendVoiceRequestMessage(`🎤 ${reason}`);
       },
@@ -534,6 +538,7 @@ export class BotInstance extends EventEmitter {
       this.voiceRequest.stop();
       this.tsClient.setVoiceDataEnabled(false);
       this.voiceClientNames.clear();
+      this.pendingVoiceCommands.clear();
       this.player.clearWakeCue();
       // Cancel any pending live-queue snapshot BEFORE clearing the queue: a
       // debounced snapshot firing after clear() would persist an empty queue
@@ -603,6 +608,7 @@ export class BotInstance extends EventEmitter {
       this.voiceDucking.removeSpeaker(event.id);
       this.voiceRequest.removeSpeaker(event.id);
       this.voiceClientNames.delete(event.id);
+      this.pendingVoiceCommands.delete(event.id);
       void this.refreshOccupancy();
     });
     this.tsClient.on("clientMoved", (event: { id: number; targetChannelID: bigint }) => {
@@ -612,6 +618,7 @@ export class BotInstance extends EventEmitter {
         this.voiceDucking.reset(false);
         this.voiceRequest.cancel();
         this.voiceClientNames.clear();
+        this.pendingVoiceCommands.clear();
         // Carry the now-playing channel description over to the new
         // channel instead of leaving it stale in the old one (#159).
         this.profileManager.onChannelMoved(event.targetChannelID).catch((err) => {
@@ -622,6 +629,7 @@ export class BotInstance extends EventEmitter {
         this.voiceDucking.removeSpeaker(event.id);
         this.voiceRequest.removeSpeaker(event.id);
         this.voiceClientNames.delete(event.id);
+        this.pendingVoiceCommands.delete(event.id);
         this._resumeIfReturning(event.id, event.targetChannelID);
       }
       void this.refreshOccupancy();
@@ -747,6 +755,7 @@ export class BotInstance extends EventEmitter {
     this.voiceRequest.stop();
     this.tsClient.setVoiceDataEnabled(false);
     this.voiceClientNames.clear();
+    this.pendingVoiceCommands.clear();
     this.player.clearWakeCue();
     // Cancel any pending live-queue snapshot before clearing so it can't fire
     // afterwards and persist an empty queue over the state we keep for restore
@@ -802,6 +811,7 @@ export class BotInstance extends EventEmitter {
   }
 
   updateVoiceRequest(enabled: boolean, mode = this.config.voiceRequest.mode): void {
+    this.pendingVoiceCommands.clear();
     this.config.voiceRequest.enabled = enabled;
     this.config.voiceRequest.mode = mode;
     this.tsClient.setVoiceDataEnabled(this.connected && enabled);
@@ -848,19 +858,51 @@ export class BotInstance extends EventEmitter {
 
   private async handleVoicePlayRequest(clientId: number, transcript: string): Promise<void> {
     if (!this.connected || !this.config.voiceRequest.enabled) return;
-    const command = parseVoiceCommand(transcript);
-    if (!command) {
-      await this.sendVoiceRequestMessage(`🎤 没听懂语音指令：${transcript.slice(0, 80) || "空白"}。请说“播放 歌名”、“暂停”、“继续”、“上一首”或“下一首”。`);
-      return;
-    }
+    const parsed = analyzeVoiceCommand(transcript);
+    const token = Symbol();
+    const generation = this.lifecycleGeneration;
+    this.pendingVoiceCommands.set(clientId, token);
+    const isCurrent = () => this.connected && this.config.voiceRequest.enabled &&
+      this.lifecycleGeneration === generation && this.pendingVoiceCommands.get(clientId) === token;
     const requester = this.voiceClientNames.get(clientId) ?? `频道用户 ${clientId}`;
     try {
-      const query = command.name === "play" ? command.query : "";
-      const reply = await this.executeCommand({ name: command.name, args: query, rawArgs: query ? [query] : [], flags: new Set() }, undefined, requester);
-      if (reply) await this.sendVoiceRequestMessage(`🎤 ${reply}`);
+      let command = parsed === "blocked" ? null : parsed;
+      if (parsed === null && this.config.voiceRequest.semanticFallback) {
+        const started = performance.now();
+        command = await inferVoiceCommand(transcript);
+        if (!isCurrent()) return;
+        this.logger.info({ elapsedMs: Math.round(performance.now() - started), accepted: !!command }, "Local voice intent");
+      }
+      if (!command) {
+        await this.sendVoiceRequestMessage("🎤 没听清要做哪一件事。可以说“放首晴天”“这首跳过吧”或“现在这首叫什么”。");
+        return;
+      }
+      let reply: string | null;
+      if ("query" in command) {
+        const result = await this.resolveVoiceSong(command);
+        if (!isCurrent()) return;
+        reply = result.song ? await this.executeSongCommand(command.name, result.song, requester) : result.error ?? null;
+      } else {
+        let args = "";
+        if (command.name === "vol") {
+          const allowed = await this.isCommandAllowed(command.name, String(clientId));
+          if (!isCurrent()) return;
+          if (!allowed) {
+            await this.sendVoiceRequestMessage(COMMAND_DENIED_MESSAGE);
+            return;
+          }
+          const target = command.kind === "absolute" ? command.value : this.player.getVolume() + command.value;
+          args = String(Math.max(0, Math.min(100, target)));
+        }
+        reply = await this.executeCommand({ name: command.name, args, rawArgs: args ? [args] : [], flags: new Set() }, undefined, requester);
+      }
+      if (reply && isCurrent()) await this.sendVoiceRequestMessage(`🎤 ${reply}`);
     } catch (err) {
-      this.logger.warn({ err, clientId, command }, "Voice command failed");
+      if (!isCurrent()) return;
+      this.logger.warn({ err, clientId }, "Voice command failed");
       await this.sendVoiceRequestMessage("🎤 语音指令执行失败，请稍后重试");
+    } finally {
+      if (this.pendingVoiceCommands.get(clientId) === token) this.pendingVoiceCommands.delete(clientId);
     }
   }
 
@@ -961,7 +1003,7 @@ export class BotInstance extends EventEmitter {
     // A numeric invoker ID only belongs to this TeamSpeak connection.
     const generation = this.lifecycleGeneration;
     const isCurrent = () => this.lifecycleGeneration === generation;
-    const allowed = await this.isCommandAllowed(parsed.name, msg);
+    const allowed = await this.isCommandAllowed(parsed.name, msg.invokerId);
     if (!isCurrent()) return;
 
     if (!allowed) {
@@ -1012,16 +1054,16 @@ export class BotInstance extends EventEmitter {
    * out-of-channel senders and stale after a live promotion/demotion. Fails
    * closed when the groups can't be determined.
    */
-  private async isCommandAllowed(commandName: string, msg: TS3TextMessage): Promise<boolean> {
-    const adminGroups = this.config.adminGroups;
+  private async isCommandAllowed(commandName: string, invokerId: string): Promise<boolean> {
+    const { adminGroups } = this.config;
     // Public command, or enforcement off → allow without any lookup.
     // (canRunCommand with empty groups is true iff the command is public OR
     // adminGroups is empty.)
     if (canRunCommand(commandName, [], adminGroups)) return true;
     // Enforced admin command: authoritative decision uses freshly-resolved,
     // server-wide groups. Fail closed if they can't be determined.
-    const groups = await this.lookupInvokerGroups(msg.invokerId);
-    return canRunCommand(commandName, groups, adminGroups);
+    const groups = await this.lookupInvokerGroups(invokerId);
+    return canRunCommand(commandName, groups, this.config.adminGroups);
   }
 
   /**
@@ -1069,12 +1111,15 @@ export class BotInstance extends EventEmitter {
       case "find":
         return this.cmdSearch(cmd);
       case "play":
-        return this.cmdPlay(cmd, requesterName);
       case "add":
-        return this.cmdAdd(cmd, requesterName);
       case "playnext":
-      case "pn":
-        return this.cmdPlayNext(cmd, requesterName);
+      case "pn": {
+        const name = cmd.name === "pn" ? "playnext" : cmd.name;
+        if (!cmd.args) return `Usage: ${this.config.commandPrefix}${name} <song name | #N | id <id> | URL>`;
+        const { song, error } = await this.resolvePlayQuery(cmd);
+        if (!song) return error ?? null;
+        return this.executeSongCommand(name, song, requesterName);
+      }
       case "pause":
         return this.cmdPause();
       case "resume":
@@ -1618,19 +1663,49 @@ export class BotInstance extends EventEmitter {
     ].join("\n");
   }
 
-  private async cmdPlay(cmd: ParsedCommand, requesterName?: string): Promise<string> {
-    if (!cmd.args) return `Usage: ${this.config.commandPrefix}play <song name | #N | id <id> | URL>`;
-    const { song, error } = await this.resolvePlayQuery(cmd);
-    if (error) return error;
-    const song0 = song!;
-    let why: string | undefined;
-    const ok = await this.playSingleSong(song0, requesterName, (failure, currentTrackContinues) => {
-      why = currentTrackContinues
-        ? `Could not restart ${song0.name}. The current track is still playing: ${failure.message}`
-        : `Cannot play: ${song0.name} — ${failure.message}`;
+  private async resolveVoiceSong(command: VoiceSongCommand): Promise<{ song?: Song; error?: string }> {
+    const { query, artist, platform, literalTitle } = command;
+    if (parseSelectionIndex(query) !== null) return { error: "请直接说歌名，也可以加上歌手。" };
+    const ref = artist ? null : parseSongRef(query);
+    if (platform && ref?.platform && platform !== ref.platform) return { error: "指定的音源与歌曲链接不一致。" };
+    const selectedPlatform = ref?.platform ?? platform ?? defaultPlatform(this.config);
+    if (!isProviderEnabled(this.config, selectedPlatform)) return { error: `音源未启用：${selectedPlatform}` };
+    const provider = this.getProviderFor(selectedPlatform);
+    if (ref) {
+      const song = await provider.getSongDetail(ref.id);
+      return song ? { song: { ...song, platform: provider.platform } } : { error: "这个音源里没有找到该歌曲。" };
+    }
+    const search = await provider.search(artist ? `${query} ${artist}` : query, 5);
+    const normalize = (value: string) => value.normalize("NFKC").toLowerCase().replace(/\s+/gu, "");
+    const titleKey = normalize(query);
+    const artistKey = artist ? normalize(artist) : undefined;
+    const literalKey = literalTitle ? normalize(literalTitle) : undefined;
+    const match = search.songs.slice(0, 5).find(song => {
+      const songKey = normalize(song.name);
+      const artistMatches = !artistKey || normalize(song.artist) === artistKey ||
+        song.artist.split(" / ").some(name => normalize(name) === artistKey);
+      return (songKey === titleKey && artistMatches) || songKey === literalKey;
     });
-    if (!ok) return why ?? `Cannot play: ${song0.name}`;
-    return `Now playing: ${song0.name} - ${song0.artist}`;
+    if (!match) return { error: `没有找到匹配“${query}”的歌曲，可以再说一次歌名和歌手。` };
+    const song = provider.platform === "bilibili" ? await provider.getSongDetail(match.id) ?? match : match;
+    return { song: { ...song, platform: provider.platform } };
+  }
+
+  private async executeSongCommand(
+    name: VoiceSongCommand["name"],
+    song: Song,
+    requesterName?: string,
+  ): Promise<string> {
+    if (name === "add") return this.addSongForCommand(song, requesterName);
+    if (name === "playnext") return this.insertSongForCommand(song, requesterName);
+    let why: string | undefined;
+    const ok = await this.playSingleSong(song, requesterName, (failure, currentTrackContinues) => {
+      why = currentTrackContinues
+        ? `Could not restart ${song.name}. The current track is still playing: ${failure.message}`
+        : `Cannot play: ${song.name} — ${failure.message}`;
+    });
+    if (!ok) return why ?? `Cannot play: ${song.name}`;
+    return `Now playing: ${song.name} - ${song.artist}`;
   }
 
   /** Start the requested song before changing the queue or stopping FM. */
@@ -1710,14 +1785,9 @@ export class BotInstance extends EventEmitter {
     this.emit("stateChange");
   }
 
-  private async cmdAdd(cmd: ParsedCommand, requesterName?: string): Promise<string> {
-    if (!cmd.args) return `Usage: ${this.config.commandPrefix}add <song name | #N | id <id> | URL>`;
-    const { song, error } = await this.resolvePlayQuery(cmd);
-    if (error) return error;
-    const s = song!;
-
+  private async addSongForCommand(song: Song, requesterName?: string): Promise<string> {
     const wasIdle = this.player.getState() === "idle";
-    this.queue.add(this.withRequester(s, requesterName));
+    this.queue.add(this.withRequester(song, requesterName));
 
     // If nothing was playing, start this newly-added song immediately.
     // Matches /api/player/:id/add-by-id behavior so both add paths feel
@@ -1727,19 +1797,14 @@ export class BotInstance extends EventEmitter {
       this.player.resetFailures();
       const failure = await startTrackForCommand(this, this.queue.current());
       this.emit("stateChange");
-      return failure ?? `Now playing: ${s.name} - ${s.artist}`;
+      return failure ?? `Now playing: ${song.name} - ${song.artist}`;
     }
 
     this.emit("stateChange");
-    return `Added to queue: ${s.name} - ${s.artist} (position ${this.queue.size()})`;
+    return `Added to queue: ${song.name} - ${song.artist} (position ${this.queue.size()})`;
   }
 
-  private async cmdPlayNext(cmd: ParsedCommand, requesterName?: string): Promise<string> {
-    if (!cmd.args) return `Usage: ${this.config.commandPrefix}playnext <song name | #N | id <id> | URL>`;
-    const { song, error } = await this.resolvePlayQuery(cmd);
-    if (error) return error;
-    const s = song!;
-
+  private async insertSongForCommand(song: Song, requesterName?: string): Promise<string> {
     const wasIdle = this.player.getState() === "idle";
     // Capture the slot addNext WILL insert at, before mutating the queue.
     // addNext pushes when currentIndex<0 (slot = size); otherwise splices
@@ -1750,18 +1815,18 @@ export class BotInstance extends EventEmitter {
       this.queue.getCurrentIndex() < 0
         ? this.queue.size()
         : this.queue.getCurrentIndex() + 1;
-    this.queue.addNext(this.withRequester(s, requesterName));
+    this.queue.addNext(this.withRequester(song, requesterName));
 
     if (wasIdle) {
       this.queue.playAt(insertedAt);
       this.player.resetFailures();
       const failure = await startTrackForCommand(this, this.queue.current());
       this.emit("stateChange");
-      return failure ?? `Now playing: ${s.name} - ${s.artist}`;
+      return failure ?? `Now playing: ${song.name} - ${song.artist}`;
     }
 
     this.emit("stateChange");
-    return `Up next: ${s.name} - ${s.artist}`;
+    return `Up next: ${song.name} - ${song.artist}`;
   }
 
   private cmdPause(): string {
