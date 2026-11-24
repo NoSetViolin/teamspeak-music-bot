@@ -891,7 +891,7 @@
       <label class="profile-toggle behavior-toggle">
         <div class="profile-toggle-text">
           <div class="profile-toggle-label">频道语音点歌</div>
-          <div class="profile-toggle-hint">先在下方录制声纹。在 TeamSpeak 说“布鲁斯布鲁斯”，听到提示音后说一条指令，例如“放首晴天”“把晴天加到队尾”“这首跳过吧”或“现在这首叫什么”。支持多人，默认关闭。</div>
+          <div class="profile-toggle-hint"><template v-if="voiceRequestMode === 'voiceprint'">先在下方录制声纹。</template>在 TeamSpeak 说“{{ voiceWakePhrase }}”，听到提示音后再说指令，例如“放首晴天”或“这首跳过吧”。</div>
           <div v-if="!voiceRequestModelsReady" class="profile-toggle-hint">模型未安装：在服务端运行 npm run setup:voice 后刷新页面。</div>
           <div v-if="voiceRequestMessage" class="profile-toggle-hint" role="status">{{ voiceRequestMessage }}</div>
         </div>
@@ -899,12 +899,27 @@
           v-model="voiceRequestEnabled"
           type="checkbox"
           class="profile-toggle-switch"
-          :disabled="voiceRequestSaving || (!voiceRequestModelsReady && !voiceRequestEnabled)"
-          @change="saveVoiceRequest"
+          :disabled="!voiceRequestLoaded || voiceRequestSaving || voiceprintBusy || (!voiceRequestModelsReady && !voiceRequestEnabled)"
+          @change="saveVoiceRequest('enabled')"
         />
       </label>
 
-      <div v-if="voiceRequestModelsReady && voiceRequestEnabled" class="voiceprint-card">
+      <form class="setting-row" @submit.prevent="saveVoiceRequest('wakePhrase')">
+        <div class="setting-label">
+          <Icon icon="mdi:account-voice" class="setting-icon" />
+          <div>
+            <label for="voice-wake-phrase">语音点歌唤醒词</label>
+            <div class="profile-toggle-hint" id="voice-wake-phrase-hint">所有机器人共用。输入 2～12 个汉字，留空恢复默认。</div>
+            <div v-if="voiceWakePhraseLocked" class="profile-toggle-hint">完成或重新开始当前声纹学习后可修改。</div>
+          </div>
+        </div>
+        <div class="prefix-input-wrap">
+          <input id="voice-wake-phrase" v-model="voiceWakePhraseDraft" class="input voice-wake-phrase-input" :placeholder="defaultVoiceWakePhrase" aria-describedby="voice-wake-phrase-hint" :disabled="voiceWakePhraseDisabled" />
+          <button class="btn-primary" type="submit" :disabled="voiceWakePhraseDisabled || voiceWakePhraseDraft.trim() === voiceWakePhrase">保存</button>
+        </div>
+      </form>
+
+      <div v-if="voiceRequestModelsReady && voiceRequestEnabled && voiceRequestMode === 'voiceprint'" class="voiceprint-card">
         <div class="voiceprint-card-header">
           <div class="voiceprint-orb"><Icon icon="mdi:microphone-settings" /></div>
           <div>
@@ -919,16 +934,43 @@
           <div class="voiceprint-step"><span>3</span><div><strong>完成 6 句录音</strong><small>逐句检查，全部完成后保存声音档案</small></div></div>
         </div>
         <div class="voiceprint-form">
-          <label class="voiceprint-field">
-            <span>绑定机器人</span>
-            <select v-model="voiceprintBotId" class="input" :disabled="voiceprintBusy || voiceprintSamples.length > 0" @change="loadVoiceprints">
-              <option value="">请选择机器人</option>
-              <option v-for="bot in store.bots" :key="bot.id" :value="bot.id">{{ bot.name }}</option>
-            </select>
-          </label>
+          <div class="voiceprint-field">
+            <span id="voiceprint-bot-label">绑定机器人</span>
+            <div class="voiceprint-bot-picker" @focusout="onVoiceprintBotFocusout" @keydown="onVoiceprintBotKeydown">
+              <button
+                ref="voiceprintBotTrigger"
+                type="button"
+                class="input voiceprint-bot-trigger"
+                aria-labelledby="voiceprint-bot-label voiceprint-bot-value"
+                aria-controls="voiceprint-bot-options"
+                :aria-expanded="voiceprintBotMenuOpen"
+                :disabled="!store.bots.length || voiceprintBusy || voiceprintSamples.length > 0"
+                @click="toggleVoiceprintBotMenu"
+              >
+                <span id="voiceprint-bot-value">{{ voiceprintSelectedBot?.name ?? '请选择机器人' }}</span>
+                <Icon icon="mdi:chevron-down" aria-hidden="true" />
+              </button>
+              <div v-show="voiceprintBotMenuOpen" id="voiceprint-bot-options" class="voiceprint-bot-menu" role="group" aria-labelledby="voiceprint-bot-label">
+                <button
+                  v-for="bot in store.bots"
+                  :key="bot.id"
+                  type="button"
+                  class="voiceprint-bot-choice"
+                  :aria-pressed="bot.id === voiceprintBotId"
+                  @mousedown.prevent
+                  @click="selectVoiceprintBot(bot.id)"
+                >
+                  <i class="voiceprint-bot-dot" :class="{ online: bot.connected }" aria-hidden="true"></i>
+                  <span>{{ bot.name }}</span>
+                  <Icon v-if="bot.id === voiceprintBotId" icon="mdi:check" aria-hidden="true" />
+                </button>
+                <button v-if="voiceprintBotId" type="button" class="voiceprint-bot-choice" @mousedown.prevent @click="selectVoiceprintBot('')">取消选择</button>
+              </div>
+            </div>
+          </div>
           <label class="voiceprint-field">
             <span>声纹名称</span>
-            <input v-model="voiceprintName" class="input" maxlength="32" placeholder="例如：我的声音" :disabled="voiceprintBusy || voiceprintSamples.length > 0" />
+            <input v-model="voiceprintName" class="input" maxlength="35" :placeholder="defaultVoiceprintName" :disabled="voiceprintBusy || voiceprintSamples.length > 0" />
           </label>
         </div>
         <div class="voiceprint-progress" aria-label="学习进度">
@@ -950,9 +992,9 @@
           </div>
           <small class="voiceprint-coach-tip">每句录制约 2～6 秒，最长 8 秒。远距离步骤请保持平常音量。</small>
         </div>
-        <div v-else class="voiceprint-finished"><Icon :icon="voiceprintCompleted ? 'mdi:check-decagram' : 'mdi:account-voice'" /><strong>{{ voiceprintCompleted ? '已经记住你的声音' : '6 句已收集，准备保存' }}</strong><p>{{ voiceprintCompleted ? '在 TeamSpeak 说“布鲁斯布鲁斯”，听到提示音后再说指令。' : '保存后，机器人会使用这些不同距离和语气的声音特征进行唤醒匹配。' }}</p></div>
+        <div v-else class="voiceprint-finished"><Icon :icon="voiceprintCompleted ? 'mdi:check-decagram' : 'mdi:account-voice'" /><strong>{{ voiceprintCompleted ? '已经记住你的声音' : '6 句已收集，准备保存' }}</strong><p>{{ voiceprintCompleted ? `在 TeamSpeak 说“${voiceWakePhrase}”，听到提示音后再说指令。` : '保存后，机器人会使用这些不同距离和语气的声音特征进行唤醒匹配。' }}</p></div>
         <div class="voiceprint-actions">
-          <button v-if="voiceprintSamples.length < voiceprintPrompts.length" class="voiceprint-record-btn" :class="{ recording: voiceprintRecording }" :disabled="voiceprintSaving || voiceprintStarting || !voiceprintBotId || !voiceprintName.trim()" @click="toggleVoiceprintRecording">
+          <button v-if="voiceprintSamples.length < voiceprintPrompts.length" class="voiceprint-record-btn" :class="{ recording: voiceprintRecording }" :disabled="voiceRequestSaving || voiceprintSaving || voiceprintStarting || !voiceprintBotId || !voiceprintName.trim()" @click="toggleVoiceprintRecording">
             <Icon :icon="voiceprintRecording ? 'mdi:stop' : 'mdi:microphone'" />
             {{ voiceprintRecording ? `停止录音 ${voiceprintSeconds}s` : voiceprintStarting ? '正在连接麦克风…' : `录制第 ${voiceprintSamples.length + 1} 句` }}
           </button>
@@ -1439,6 +1481,7 @@ import {
 } from '../composables/useSpotifySettings.js';
 
 const store = usePlayerStore();
+const session = useSession();
 function chooseAccent(color: string) {
   store.setAccentColor(color);
   accentSaveError.value = '';
@@ -1950,27 +1993,41 @@ const idleTimeout = ref(0);
 const autoPauseOnEmpty = ref(false);
 // Voice ducking defaults OFF and retains 30% of the configured player volume.
 const voiceDuckingEnabled = ref(false);
+const defaultVoiceWakePhrase = '布鲁斯布鲁斯';
 const voiceRequestEnabled = ref(false);
+const voiceRequestMode = ref<'voiceprint' | 'keyword'>('voiceprint');
+const voiceRequestLoaded = ref(false);
 const voiceRequestModelsReady = ref(false);
 const voiceRequestSaving = ref(false);
 const voiceRequestMessage = ref('');
+const voiceWakePhrase = ref(defaultVoiceWakePhrase);
+const voiceWakePhraseDraft = ref(defaultVoiceWakePhrase);
 const voiceprintBotId = ref('');
-const voiceprintName = ref('我的声音');
+const voiceprintBotTrigger = ref<HTMLButtonElement>();
+const voiceprintBotMenuOpen = ref(false);
+const voiceprintSelectedBot = computed(() => store.bots.find(bot => bot.id === voiceprintBotId.value));
+const defaultVoiceprintName = computed(() => `${session.currentUser.value?.username ?? '我'}的声音`);
+const voiceprintName = ref(defaultVoiceprintName.value);
+watch(defaultVoiceprintName, (name, previous) => {
+  if (voiceprintName.value === previous) voiceprintName.value = name;
+});
 const voiceprintRecording = ref(false);
 const voiceprintStarting = ref(false);
 const voiceprintSaving = ref(false);
 const voiceprintCompleted = ref(false);
 const voiceprintBusy = computed(() => voiceprintRecording.value || voiceprintSaving.value || voiceprintStarting.value);
-const voiceprintPrompts = [
-  { title: '自然唤醒', icon: 'mdi:microphone', phrase: '布鲁斯布鲁斯', hint: '保持平常坐姿，距离麦克风约 20～30 厘米，用平时说话的音量读出唤醒词。' },
-  { title: '远距离', icon: 'mdi:arrow-expand-horizontal', phrase: '布鲁斯布鲁斯', hint: '退到你平时希望唤醒机器人的位置，例如距离麦克风 0.5～1 米。保持自然音量。' },
-  { title: '轻声唤醒', icon: 'mdi:volume-low', phrase: '布鲁斯布鲁斯', hint: '回到常用位置，稍微放轻声音，像安静聊天时一样说出唤醒词。' },
-  { title: '不同语速', icon: 'mdi:waveform', phrase: '布鲁斯布鲁斯', hint: '用另一种自然语气或略慢的语速再说一遍，帮助覆盖日常发音变化。' },
-  { title: '日常点歌', icon: 'mdi:music-note', phrase: '布鲁斯布鲁斯，帮我播放一首喜欢的歌', hint: '像和朋友说话一样，连贯读完这句点歌例句，让声音档案覆盖更多发音。' },
-  { title: '远讲例句', icon: 'mdi:account-voice', phrase: '布鲁斯布鲁斯，今天想听一点轻松的音乐', hint: '再次退到常用的远距离位置，自然读完整句。说完后点击停止，完成最后一组样本。' },
-];
+const voiceprintPrompts = computed(() => [
+  { title: '自然唤醒', icon: 'mdi:microphone', phrase: voiceWakePhrase.value, hint: '保持平常坐姿，距离麦克风约 20～30 厘米，用平时说话的音量读出唤醒词。' },
+  { title: '远距离', icon: 'mdi:arrow-expand-horizontal', phrase: voiceWakePhrase.value, hint: '退到你平时希望唤醒机器人的位置，例如距离麦克风 0.5～1 米。保持自然音量。' },
+  { title: '轻声唤醒', icon: 'mdi:volume-low', phrase: voiceWakePhrase.value, hint: '回到常用位置，稍微放轻声音，像安静聊天时一样说出唤醒词。' },
+  { title: '不同语速', icon: 'mdi:waveform', phrase: voiceWakePhrase.value, hint: '用另一种自然语气或略慢的语速再说一遍，帮助覆盖日常发音变化。' },
+  { title: '日常点歌', icon: 'mdi:music-note', phrase: `${voiceWakePhrase.value}，帮我播放一首喜欢的歌`, hint: '像和朋友说话一样，连贯读完这句点歌例句，让声音档案覆盖更多发音。' },
+  { title: '远讲例句', icon: 'mdi:account-voice', phrase: `${voiceWakePhrase.value}，今天想听一点轻松的音乐`, hint: '再次退到常用的远距离位置，自然读完整句。说完后点击停止，完成最后一组样本。' },
+]);
 const voiceprintSamples = ref<Array<{ audioBase64: string; transcript: string; duration: number }>>([]);
-const voiceprintCurrentPrompt = computed(() => voiceprintPrompts[Math.min(voiceprintSamples.value.length, voiceprintPrompts.length - 1)]!);
+const voiceprintCurrentPrompt = computed(() => voiceprintPrompts.value[Math.min(voiceprintSamples.value.length, voiceprintPrompts.value.length - 1)]!);
+const voiceWakePhraseLocked = computed(() => voiceRequestEnabled.value && voiceprintSamples.value.length > 0 && !voiceprintCompleted.value);
+const voiceWakePhraseDisabled = computed(() => !voiceRequestLoaded.value || voiceRequestSaving.value || voiceprintBusy.value || voiceWakePhraseLocked.value);
 let voiceprintSessionVersion = 0;
 const voiceprintSeconds = ref(0);
 const voiceprintMessage = ref('');
@@ -2028,8 +2085,9 @@ async function loadIdleTimeout() {
     const res = await axios.get('/api/bot/settings');
     idleTimeout.value = res.data.idleTimeoutMinutes ?? 0;
     autoPauseOnEmpty.value = res.data.autoPauseOnEmpty ?? false;
-    voiceRequestEnabled.value = res.data.voiceRequest?.enabled === true;
-    voiceRequestModelsReady.value = res.data.voiceRequest?.modelsReady === true;
+    applyVoiceRequestSettings(res.data.voiceRequest);
+    voiceWakePhraseDraft.value = voiceWakePhrase.value;
+    voiceRequestLoaded.value = true;
     // A later save owns the state. Do not let an older GET response overwrite
     // it if this loader is ever re-entered while a POST is in flight.
     if (voiceDuckingLoadRevision === voiceDuckingRequestRevision) {
@@ -2096,18 +2154,30 @@ async function saveVoiceDucking() {
   }
 }
 
-async function saveVoiceRequest() {
+function applyVoiceRequestSettings(settings?: { enabled?: boolean; mode?: string; modelsReady?: boolean; wakePhrase?: string }) {
+  voiceRequestEnabled.value = settings?.enabled === true;
+  voiceRequestMode.value = settings?.mode === 'keyword' ? 'keyword' : 'voiceprint';
+  voiceRequestModelsReady.value = settings?.modelsReady === true;
+  voiceWakePhrase.value = settings?.wakePhrase || defaultVoiceWakePhrase;
+}
+
+async function saveVoiceRequest(field: 'enabled' | 'wakePhrase') {
   if (voiceRequestSaving.value) return;
+  if (field === 'wakePhrase' && voiceWakePhraseDisabled.value) return;
   voiceRequestSaving.value = true;
   voiceRequestMessage.value = '';
-  const submitted = voiceRequestEnabled.value;
+  const enabled = voiceRequestEnabled.value;
+  const previousWakePhrase = voiceWakePhrase.value;
+  const update = field === 'enabled' ? { enabled } : { wakePhrase: voiceWakePhraseDraft.value.trim() };
   try {
-    const res = await axios.post('/api/bot/settings', { voiceRequest: { enabled: submitted } });
-    voiceRequestEnabled.value = res.data.voiceRequest?.enabled === true;
-    voiceRequestModelsReady.value = res.data.voiceRequest?.modelsReady === true;
-  } catch {
-    voiceRequestEnabled.value = !submitted;
-    voiceRequestMessage.value = '保存失败，请确认服务端已安装语音模型';
+    const res = await axios.post('/api/bot/settings', { voiceRequest: update });
+    applyVoiceRequestSettings(res.data.voiceRequest);
+    if (voiceWakePhrase.value !== previousWakePhrase) resetVoiceprintLearning();
+    if (field === 'wakePhrase' || voiceWakePhrase.value !== previousWakePhrase) voiceWakePhraseDraft.value = voiceWakePhrase.value;
+    if (field === 'wakePhrase') voiceRequestMessage.value = `唤醒词已保存为“${voiceWakePhrase.value}”`;
+  } catch (err: any) {
+    if (field === 'enabled') voiceRequestEnabled.value = !enabled;
+    voiceRequestMessage.value = err?.response?.data?.error ?? '保存失败，请稍后重试';
   } finally {
     voiceRequestSaving.value = false;
   }
@@ -2116,6 +2186,44 @@ async function saveVoiceRequest() {
 function chooseVoiceprintMime(): string {
   const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
   return candidates.find((mime) => MediaRecorder.isTypeSupported(mime)) ?? '';
+}
+
+function toggleVoiceprintBotMenu() {
+  voiceprintBotTrigger.value?.focus();
+  voiceprintBotMenuOpen.value = !voiceprintBotMenuOpen.value;
+}
+
+function onVoiceprintBotFocusout(event: FocusEvent) {
+  if (!(event.currentTarget as HTMLElement).contains(event.relatedTarget as Node | null)) {
+    voiceprintBotMenuOpen.value = false;
+  }
+}
+
+async function onVoiceprintBotKeydown(event: KeyboardEvent) {
+  if (event.key === 'Escape' && voiceprintBotMenuOpen.value) {
+    event.stopPropagation();
+    voiceprintBotTrigger.value?.focus();
+    voiceprintBotMenuOpen.value = false;
+    return;
+  }
+  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+  event.preventDefault();
+  const picker = event.currentTarget as HTMLElement;
+  voiceprintBotMenuOpen.value = true;
+  await nextTick();
+  const options = [...picker.querySelectorAll<HTMLButtonElement>('.voiceprint-bot-choice')];
+  const index = options.indexOf(document.activeElement as HTMLButtonElement);
+  const direction = event.key === 'ArrowDown' ? 1 : -1;
+  const next = index < 0 ? (direction > 0 ? 0 : options.length - 1) : (index + direction + options.length) % options.length;
+  options[next]?.focus();
+}
+
+function selectVoiceprintBot(id: string) {
+  voiceprintBotTrigger.value?.focus();
+  voiceprintBotMenuOpen.value = false;
+  if (id === voiceprintBotId.value) return;
+  voiceprintBotId.value = id;
+  void loadVoiceprints();
 }
 
 async function loadVoiceprints() {
@@ -2215,11 +2323,11 @@ async function analyzeVoiceprintSample(blob: Blob) {
       reader.onerror = () => reject(reader.error ?? new Error('read failed'));
       reader.readAsDataURL(blob);
     });
-    const res = await axios.post(`/api/bot/${voiceprintBotId.value}/voiceprints/analyze`, { audioBase64 });
+    const res = await axios.post(`/api/bot/${voiceprintBotId.value}/voiceprints/analyze`, { audioBase64, wakePhrase: voiceWakePhrase.value });
     if (version !== voiceprintSessionVersion) return;
     voiceprintSamples.value.push({ audioBase64, transcript: res.data.transcript, duration: res.data.duration });
     voiceprintMessageTone.value = 'ok';
-    voiceprintMessage.value = voiceprintSamples.value.length === voiceprintPrompts.length
+    voiceprintMessage.value = voiceprintSamples.value.length === voiceprintPrompts.value.length
       ? '所有例句已通过检查，点击保存声音档案完成学习。'
       : `第 ${voiceprintSamples.value.length} 句已通过，接下来请按上方提示录制下一句。`;
   } catch (err: any) {
@@ -2232,12 +2340,13 @@ async function analyzeVoiceprintSample(blob: Blob) {
 }
 
 async function saveVoiceprintLearning() {
-  if (voiceprintBusy.value || voiceprintSamples.value.length !== voiceprintPrompts.length) return;
+  if (voiceprintBusy.value || voiceprintSamples.value.length !== voiceprintPrompts.value.length) return;
   voiceprintSaving.value = true;
   const version = voiceprintSessionVersion;
   try {
     await axios.post(`/api/bot/${voiceprintBotId.value}/voiceprints`, {
       name: voiceprintName.value.trim(),
+      wakePhrase: voiceWakePhrase.value,
       audioSamplesBase64: voiceprintSamples.value.map(sample => sample.audioBase64),
     });
     if (version !== voiceprintSessionVersion) return;
@@ -2567,7 +2676,6 @@ async function updateProfile(botId: string, key: keyof ProfileConfig, value: boo
 }
 
 // --- User Management ---
-const session = useSession();
 const { can } = session;
 const accentSaving = ref(false);
 const accentSaveError = ref('');
@@ -3551,6 +3659,7 @@ onUnmounted(() => {
 }
 
 .input-sm { max-width: 80px; }
+.voice-wake-phrase-input { max-width: 112px; min-width: 0; }
 
 // The default-source picker holds full source names ("网易云音乐"), so it needs
 // more room than the 80px .input-sm cap.
@@ -3990,7 +4099,68 @@ onUnmounted(() => {
 .voiceprint-step strong { font-size: 12px; color: var(--text-primary); }
 .voiceprint-step small { margin-top: 4px; color: var(--text-secondary); font-size: 11px; line-height: 1.4; }
 .voiceprint-form { position: relative; z-index: 1; display: grid; grid-template-columns: 1.4fr 1fr; gap: 12px; }
-.voiceprint-field span { display: block; margin-bottom: 6px; color: var(--text-secondary); font-size: 12px; }
+.voiceprint-field > span { display: block; margin-bottom: 6px; color: var(--text-secondary); font-size: 12px; }
+.voiceprint-field { min-width: 0; }
+.voiceprint-field > .input { width: 100%; }
+.voiceprint-bot-picker { position: relative; }
+.voiceprint-bot-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  cursor: pointer;
+
+  &:hover:not(:disabled), &[aria-expanded="true"] { border-color: var(--color-primary); }
+  &:disabled { opacity: .55; cursor: default; }
+  &[aria-expanded="true"] svg { transform: rotate(180deg); }
+  svg { flex-shrink: 0; color: var(--text-secondary); font-size: 18px; }
+}
+.voiceprint-bot-trigger span, .voiceprint-bot-choice span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.voiceprint-bot-menu {
+  position: absolute;
+  z-index: 2;
+  inset: calc(100% + 6px) 0 auto;
+  display: grid;
+  gap: 3px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding: 5px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow-dropdown);
+}
+.voiceprint-bot-choice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+
+  &:hover, &:focus-visible { background: var(--hover-bg); }
+  &:focus-visible { outline: 2px solid var(--color-primary); outline-offset: -2px; }
+  &[aria-pressed="true"] { background: var(--color-primary-15); }
+  svg { flex-shrink: 0; margin-left: auto; color: var(--color-primary); }
+}
+.voiceprint-bot-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+
+  &.online { background: var(--color-online); }
+}
 .voiceprint-progress { margin: 22px 0 18px; }
 .voiceprint-progress-heading { display: flex; justify-content: space-between; align-items: center; color: var(--text-secondary); font-size: 12px; }
 .voiceprint-progress-heading strong { color: var(--text-primary); font-weight: 600; }

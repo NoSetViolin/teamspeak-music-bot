@@ -2,9 +2,9 @@ import { Router } from "express";
 import type { BotManager } from "../../bot/manager.js";
 import type { BotConfig, GuestModeConfig, SpotifyConfig, JellyfinConfig, GateableProvider } from "../../data/config.js";
 import { saveConfig, GATEABLE_PROVIDERS } from "../../data/config.js";
-import { missingVoiceModels, type VoiceWakeMode } from "../../bot/voice-models.js";
+import { buildVoiceKeyword, missingVoiceModels, normalizeVoiceWakePhrase, WAKE_PHRASE, type VoiceWakeMode } from "../../bot/voice-models.js";
 import type { Logger } from "../../logger.js";
-import type { BotDatabase } from "../../data/database.js";
+import { MAX_VOICEPRINT_NAME_LENGTH, type BotDatabase } from "../../data/database.js";
 import type { AvatarStore } from "../../data/avatars.js";
 import { requirePermission, requireBotAccess } from "../middleware/requirePermission.js";
 import { requireNotGuest } from "../middleware/requireNotGuest.js";
@@ -34,6 +34,13 @@ export function createBotRouter(
   jellyfinProvider?: { configure(cfg: JellyfinConfig): void },
 ): Router {
   const router = Router();
+  const currentWakePhrase = () => config.voiceRequest.wakePhrase ?? WAKE_PHRASE;
+  const voiceRequestSettings = () => ({
+    ...config.voiceRequest,
+    wakePhrase: currentWakePhrase(),
+    modelsReady: missingVoiceModels(config.voiceRequest.mode).length === 0,
+  });
+  const wakePhraseChanged = { error: "唤醒词已修改，请刷新设置页后重新录制" };
 
   // Masked spotify view shared by the GET response and the POST echo. The raw
   // clientSecret is write-only and NEVER serialized — only whether one is stored.
@@ -74,7 +81,7 @@ export function createBotRouter(
       idleTimeoutMinutes: config.idleTimeoutMinutes ?? 0,
       autoPauseOnEmpty: config.autoPauseOnEmpty,
       voiceDucking: config.voiceDucking,
-      voiceRequest: { ...config.voiceRequest, modelsReady: missingVoiceModels(config.voiceRequest.mode).length === 0 },
+      voiceRequest: voiceRequestSettings(),
       localAudioEnabled: config.localAudioEnabled,
       savedQueuesEnabled: config.savedQueuesEnabled,
       perUserMusicAccounts: config.perUserMusicAccounts === true,
@@ -133,6 +140,37 @@ export function createBotRouter(
       return;
     }
 
+    const hasVoiceRequest = voiceRequest !== null && typeof voiceRequest === "object" && !Array.isArray(voiceRequest);
+    const requestedEnabled = hasVoiceRequest && typeof voiceRequest.enabled === "boolean"
+      ? voiceRequest.enabled
+      : config.voiceRequest.enabled;
+    const requestedMode: VoiceWakeMode = hasVoiceRequest && (voiceRequest.mode === "keyword" || voiceRequest.mode === "voiceprint")
+      ? voiceRequest.mode
+      : config.voiceRequest.mode;
+    const hasWakePhrase = hasVoiceRequest && Object.hasOwn(voiceRequest, "wakePhrase");
+    const requestedWakePhrase = hasWakePhrase ? normalizeVoiceWakePhrase(voiceRequest.wakePhrase) : currentWakePhrase();
+    if (!requestedWakePhrase) {
+      res.status(400).json({ error: "唤醒词请输入 2～12 个汉字，留空可恢复默认唤醒词" });
+      return;
+    }
+    if (hasWakePhrase) {
+      try {
+        buildVoiceKeyword(requestedWakePhrase);
+      } catch (err) {
+        logger.warn({ err }, "Invalid voice wake phrase");
+        res.status(400).json({ error: err instanceof Error ? err.message : "无法加载唤醒词" });
+        return;
+      }
+    }
+    const refreshVoiceRequest = hasVoiceRequest && (
+      typeof voiceRequest.enabled === "boolean" || requestedMode !== config.voiceRequest.mode ||
+      requestedWakePhrase !== currentWakePhrase()
+    );
+    if (refreshVoiceRequest && requestedEnabled && missingVoiceModels(requestedMode).length > 0) {
+      res.status(400).json({ error: "请先在服务端运行 npm run setup:voice 安装语音模型" });
+      return;
+    }
+
     if (hasIdle) config.idleTimeoutMinutes = idleTimeoutMinutes;
     if (hasAutoPause) config.autoPauseOnEmpty = autoPauseOnEmpty;
     if (hasLocalAudioEnabled) config.localAudioEnabled = localAudioEnabled;
@@ -158,18 +196,6 @@ export function createBotRouter(
       ) {
         config.voiceDucking.volumePercent = voiceDucking.volumePercent;
       }
-    }
-
-    const hasVoiceRequest = voiceRequest !== null && typeof voiceRequest === "object" && !Array.isArray(voiceRequest);
-    const requestedVoiceMode: VoiceWakeMode = voiceRequest?.mode === "keyword" ? "keyword" : "voiceprint";
-    const hasVoiceMode = hasVoiceRequest && (voiceRequest.mode === "keyword" || voiceRequest.mode === "voiceprint");
-    if (hasVoiceRequest && typeof voiceRequest.enabled === "boolean") {
-      if (voiceRequest.enabled && missingVoiceModels(requestedVoiceMode).length > 0) {
-        res.status(400).json({ error: "Voice models are missing. Run npm run setup:voice first." });
-        return;
-      }
-      config.voiceRequest.enabled = voiceRequest.enabled;
-      if (hasVoiceMode) config.voiceRequest.mode = requestedVoiceMode;
     }
 
     // Saved-queues + play-keeps-queue toggles (default off). Both read live from
@@ -282,7 +308,14 @@ export function createBotRouter(
       }
     }
 
-    saveConfig(configPath, config);
+    const nextVoiceRequest = refreshVoiceRequest ? {
+      ...config.voiceRequest,
+      enabled: requestedEnabled,
+      mode: requestedMode,
+      ...(hasWakePhrase ? { wakePhrase: requestedWakePhrase } : {}),
+    } : config.voiceRequest;
+    saveConfig(configPath, { ...config, voiceRequest: nextVoiceRequest });
+    config.voiceRequest = nextVoiceRequest;
 
     // Hot-apply the (possibly re-pointed) Jellyfin connection to the live
     // provider — a Settings save must work without a restart.
@@ -316,14 +349,14 @@ export function createBotRouter(
       if (hasIdle) bot.updateIdleTimeout(config.idleTimeoutMinutes);
       if (hasAutoPause) bot.updateAutoPause(config.autoPauseOnEmpty);
       if (hasVoiceDucking) bot.updateVoiceDucking(config.voiceDucking);
-      if (hasVoiceRequest) bot.updateVoiceRequest(config.voiceRequest.enabled, config.voiceRequest.mode);
+      if (refreshVoiceRequest) bot.updateVoiceRequest(requestedEnabled, requestedMode, config.voiceRequest.wakePhrase);
     }
 
     res.json({
       idleTimeoutMinutes: config.idleTimeoutMinutes ?? 0,
       autoPauseOnEmpty: config.autoPauseOnEmpty,
       voiceDucking: config.voiceDucking,
-      voiceRequest: { ...config.voiceRequest, modelsReady: missingVoiceModels(config.voiceRequest.mode).length === 0 },
+      voiceRequest: voiceRequestSettings(),
       localAudioEnabled: config.localAudioEnabled,
       savedQueuesEnabled: config.savedQueuesEnabled,
       perUserMusicAccounts: config.perUserMusicAccounts === true,
@@ -362,6 +395,12 @@ export function createBotRouter(
       return;
     }
     const encoded = req.body?.audioBase64;
+    const submittedWakePhrase = req.body?.wakePhrase;
+    const wakePhrase = currentWakePhrase();
+    if (submittedWakePhrase !== undefined && submittedWakePhrase !== wakePhrase) {
+      res.status(409).json(wakePhraseChanged);
+      return;
+    }
     if (typeof encoded !== "string" || encoded.length > 470_000 || !encoded) {
       res.status(400).json({ error: "请上传一段有效录音" });
       return;
@@ -371,7 +410,14 @@ export function createBotRouter(
       return;
     }
     try {
-      const result = await createVoiceprintFromBrowserAudio(Buffer.from(encoded.replace(/^data:[^,]+,/, ""), "base64"), false);
+      const result = await createVoiceprintFromBrowserAudio(
+        Buffer.from(encoded.replace(/^data:[^,]+,/, ""), "base64"),
+        submittedWakePhrase === undefined ? false : wakePhrase,
+      );
+      if (submittedWakePhrase !== undefined && currentWakePhrase() !== wakePhrase) {
+        res.status(409).json(wakePhraseChanged);
+        return;
+      }
       res.json({ transcript: result.transcript, duration: result.duration, rms: result.rms });
     } catch (err) {
       logger.warn({ err }, "Voiceprint sample analysis failed");
@@ -389,7 +435,14 @@ export function createBotRouter(
     const encoded = typeof req.body?.audioBase64 === "string" ? req.body.audioBase64 : "";
     const samples = req.body?.audioSamplesBase64;
     const multiSample = samples !== undefined;
-    if (!name || name.length > 32 || (!multiSample && !encoded)) {
+    const submittedWakePhrase = req.body?.wakePhrase;
+    const wakePhrase = currentWakePhrase();
+    if (submittedWakePhrase !== undefined && submittedWakePhrase !== wakePhrase) {
+      res.status(409).json(wakePhraseChanged);
+      return;
+    }
+    const requiredWakePhrase = !multiSample || submittedWakePhrase !== undefined ? wakePhrase : false;
+    if (!name || name.length > MAX_VOICEPRINT_NAME_LENGTH || (!multiSample && !encoded)) {
       res.status(400).json({ error: "请填写声纹名称并上传录音" });
       return;
     }
@@ -405,10 +458,17 @@ export function createBotRouter(
       const results = [];
       for (const [index, sample] of (multiSample ? samples as string[] : [encoded]).entries()) {
         try {
-          results.push(await createVoiceprintFromBrowserAudio(Buffer.from(sample.replace(/^data:[^,]+,/, ""), "base64"), !multiSample));
+          results.push(await createVoiceprintFromBrowserAudio(
+            Buffer.from(sample.replace(/^data:[^,]+,/, ""), "base64"),
+            requiredWakePhrase,
+          ));
         } catch (err) {
           throw new Error(`第 ${index + 1} 段录音处理失败，${err instanceof Error ? err.message : "请重试"}`);
         }
+      }
+      if (requiredWakePhrase && currentWakePhrase() !== wakePhrase) {
+        res.status(409).json(wakePhraseChanged);
+        return;
       }
       const clientUid = `web:${req.user!.id}:${name}`;
       const saved = botDb.saveVoiceprint({

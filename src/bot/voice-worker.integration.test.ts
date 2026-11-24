@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { Worker } from "node:worker_threads";
 import { getFfmpegCommand } from "../audio/player.js";
 import { createOpusEncoder } from "../audio/encoder.js";
-import { ensureVoiceKeyword, missingVoiceModels, voiceModelPaths } from "./voice-models.js";
+import { buildVoiceKeyword, missingVoiceModels, voiceModelPaths, WAKE_PHRASE } from "./voice-models.js";
 import type { VoiceprintProfile } from "./voice-request.js";
 
 const paths = voiceModelPaths();
@@ -33,9 +33,13 @@ function decodePackets(input: Buffer, scale: number): Float32Array[] {
   return packets;
 }
 
-async function runWorker(packets: Float32Array[], profiles: VoiceprintProfile[] = [{ name: "sample", embedding }]): Promise<Message[]> {
+async function runWorker(
+  packets: Float32Array[],
+  profiles: VoiceprintProfile[] = [{ name: "sample", embedding }],
+  wakePhrase = WAKE_PHRASE,
+): Promise<Message[]> {
   const worker = new Worker(new URL("./voice-worker.ts", import.meta.url), {
-    workerData: { paths, mode: "voiceprint", profiles },
+    workerData: { paths, mode: "voiceprint", keywordLine: buildVoiceKeyword(wakePhrase), profiles },
     execArgv: ["--import", "tsx"],
   });
   workers.push(worker);
@@ -65,7 +69,6 @@ async function runWorker(packets: Float32Array[], profiles: VoiceprintProfile[] 
 
 describe.skipIf(!available)("streaming wake with installed native models and Opus audio", { timeout: 30_000 }, () => {
   beforeAll(() => {
-    ensureVoiceKeyword();
     speech = execFileSync(getFfmpegCommand(), ["-v", "error", "-i", fixture, "-ar", "48000", "-ac", "2", "-f", "s16le", "pipe:1"]);
     const sherpa = createRequire(import.meta.url)("sherpa-onnx-node");
     const mono = new Float32Array(speech.length / 4);
@@ -116,6 +119,14 @@ describe.skipIf(!available)("streaming wake with installed native models and Opu
     expect(messages.some(message => message.stage === "streamingWake")).toBe(true);
     expect(messages.find(message => message.stage === "streamingWake")?.similarity).toBeLessThan(0.38);
     expect(messages.some(message => message.type === "wake")).toBe(false);
+  });
+
+  it("detects a custom wake phrase with an existing voiceprint and drops the old keyword", async () => {
+    const packets = decodePackets(speech, 1);
+    const matching = await runWorker(packets, undefined, "布鲁斯");
+    expect(matching.find(message => message.type === "wake")).toMatchObject({ id: 123, profileName: "sample" });
+    const changed = await runWorker(packets, undefined, "音乐助手");
+    expect(changed.some(message => message.type === "wake")).toBe(false);
   });
 
   it("matches an additional sample even when the primary sample does not match", async () => {

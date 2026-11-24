@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import { getFfmpegCommand } from "../audio/player.js";
-import { voiceModelPaths } from "./voice-models.js";
+import { voiceModelPaths, voiceWakeSyllables, WAKE_PHRASE } from "./voice-models.js";
 
 const require = createRequire(import.meta.url);
 const SAMPLE_RATE = 16_000;
@@ -10,7 +10,7 @@ const MAX_SAMPLES = SAMPLE_RATE * 10;
 let extractor: any;
 let recognizer: any;
 
-function decodeToPcm(audio: Buffer): Promise<Float32Array> {
+function decodeToPcm(audio: Buffer, wakePhrase: string | false): Promise<Float32Array> {
   return new Promise((resolve, reject) => {
     const child = spawn(getFfmpegCommand(), [
       "-hide_banner", "-loglevel", "error", "-i", "pipe:0",
@@ -33,7 +33,7 @@ function decodeToPcm(audio: Buffer): Promise<Float32Array> {
       }
       const samples = new Float32Array(pcm.buffer, pcm.byteOffset, pcm.length / 4);
       if (samples.length < MIN_SAMPLES) {
-        reject(new Error("录音太短，请完整说出“布鲁斯布鲁斯”"));
+        reject(new Error(wakePhrase ? `录音太短，请完整说出“${wakePhrase}”` : "录音太短，请完整读完这一句"));
         return;
       }
       if (samples.length > MAX_SAMPLES) {
@@ -90,12 +90,12 @@ function getModels(): { extractor: any; recognizer: any } {
 
 export async function createVoiceprintFromBrowserAudio(
   audio: Buffer,
-  requireWakePhrase = true,
+  wakePhrase: string | false = WAKE_PHRASE,
 ): Promise<{ embedding: number[]; transcript: string; duration: number; rms: number }> {
   if (audio.length < 1_000 || audio.length > 350_000) {
     throw new Error("录音文件大小不合适，请重新录制");
   }
-  const samples = await decodeToPcm(audio);
+  const samples = await decodeToPcm(audio, wakePhrase);
   let energy = 0;
   for (const sample of samples) energy += sample * sample;
   const rms = Math.sqrt(energy / samples.length);
@@ -115,8 +115,12 @@ export async function createVoiceprintFromBrowserAudio(
   const transcript = String(models.recognizer.getResult(asrStream).text ?? "").trim();
   const normalized = transcript.replace(/<\|[^|]*\|>/g, "").replace(/[^\p{Script=Han}]/gu, "");
   if (!normalized) throw new Error("没有检测到清晰的人声，请重新录制这一句");
-  if (requireWakePhrase && !normalized.includes("布鲁斯布鲁斯")) {
-    throw new Error(`没有听到完整唤醒词，识别结果是“${transcript || "空白"}”`);
+  if (wakePhrase && !normalized.includes(wakePhrase)) {
+    const spoken = ` ${voiceWakeSyllables(normalized).join(" ")} `;
+    const expected = ` ${voiceWakeSyllables(wakePhrase).join(" ")} `;
+    if (!spoken.includes(expected)) {
+      throw new Error(`没有听到完整的“${wakePhrase}”，识别结果是“${transcript || "空白"}”`);
+    }
   }
   return { embedding, transcript, duration: samples.length / SAMPLE_RATE, rms };
 }

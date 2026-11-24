@@ -1,4 +1,4 @@
-import { createWriteStream, existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { createWriteStream, existsSync, mkdirSync, renameSync, rmSync } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { Readable } from 'node:stream';
 import { spawn } from 'node:child_process';
@@ -56,7 +56,4 @@ if (!existsSync(speaker)) {
     speaker,
   );
 }
-// The bundled WenetSpeech KWS model uses partial pinyin tokens. This is
-// bù lǔ sī bù lǔ sī, with the original text returned on detection.
-writeFileSync(path.join(root, 'keywords.txt'), 'b ù l ǔ s ī b ù l ǔ s ī :1.8 #0.15 @布鲁斯布鲁斯\n', 'utf8');
 console.log(`Voice models ready in ${root}`);

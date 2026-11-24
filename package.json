@@ -36,6 +36,7 @@
     "koa-static": "^5.0.0",
     "NeteaseCloudMusicApi": "~4.32.0",
     "pino": "^10.3.1",
+    "pinyin-pro": "^3.29.5",
     "sherpa-onnx-node": "^1.13.8",
     "ts3-nodejs-library": "^3.5.1",
     "tweetnacl": "^1.0.3",

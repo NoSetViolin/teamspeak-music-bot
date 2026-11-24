@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { parseVoiceCommand } from "./voice-command.js";
-import { ensureVoiceKeyword, voiceModelPaths, WAKE_PHRASE } from "./voice-models.js";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { analyzeVoiceCommand, parseVoiceCommand } from "./voice-command.js";
+import { buildVoiceKeyword, normalizeVoiceWakePhrase, WAKE_PHRASE } from "./voice-models.js";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -21,6 +21,11 @@ describe("parseVoiceCommand", () => {
     expect(parseVoiceCommand("暂停。")).toEqual({ name: "pause" });
     expect(parseVoiceCommand("继续！")).toEqual({ name: "resume" });
     expect(parseVoiceCommand("布鲁斯布鲁斯，暂停")).toEqual({ name: "pause" });
+  });
+
+  it("recognizes a separate custom wake prefix and preserves a command that starts with the same words", () => {
+    expect(analyzeVoiceCommand("你好小蓝，暂停", "你好小蓝")).toEqual({ name: "pause" });
+    expect(analyzeVoiceCommand("放一首晴天", "放一首")).toEqual({ name: "play", query: "晴天" });
   });
 
   it("parses previous and next track commands", () => {
@@ -87,14 +92,17 @@ describe("parseVoiceCommand", () => {
   });
 });
 
-it("refreshes an installed keyword file with the new wake phrase", () => {
+it("encodes the custom wake phrase using the model vocabulary and retains the original default", () => {
   const root = mkdtempSync(path.join(tmpdir(), "voice-keyword-"));
   try {
-    const file = voiceModelPaths(root).keywords;
-    writeFileSync(file, "old keyword\n", "utf8");
-    ensureVoiceKeyword(root);
-    expect(WAKE_PHRASE).toBe("布鲁斯布鲁斯");
-    expect(readFileSync(file, "utf8")).toBe("b ù l ǔ s ī b ù l ǔ s ī :1.8 #0.15 @布鲁斯布鲁斯\n");
+    const file = path.join(root, "tokens.txt");
+    writeFileSync(file, "y 1\r\nīn 2\r\nuè 3\r\nzh 4\r\nù 5\r\nsh 6\r\nǒu 7\r\n", "utf8");
+    expect(buildVoiceKeyword("音乐助手", file)).toBe("y īn y uè zh ù sh ǒu :1.8 #0.15 @音乐助手\n");
+    expect(buildVoiceKeyword(WAKE_PHRASE, file)).toBe("b ù l ǔ s ī b ù l ǔ s ī :1.8 #0.15 @布鲁斯布鲁斯\n");
+    expect(() => buildVoiceKeyword("小布小布", file)).toThrow("当前语音模型不支持");
+    expect(normalizeVoiceWakePhrase("  音乐助手 ")).toBe("音乐助手");
+    expect(normalizeVoiceWakePhrase(" ")).toBe(WAKE_PHRASE);
+    expect(normalizeVoiceWakePhrase("音乐\n助手")).toBeUndefined();
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

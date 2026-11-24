@@ -52,7 +52,7 @@ import type { SpotifyTrackEndedEvent } from "../music/spotify/backend.js";
 import type { SpotifyOAuth } from "../music/spotify/spotify-oauth.js";
 import { VoiceDuckingController } from "./voice-ducking.js";
 import { VoiceRequestController, type VoiceprintProfile } from "./voice-request.js";
-import { analyzeVoiceCommand, type VoiceSongCommand } from "./voice-command.js";
+import { analyzeVoiceCommand, stripVoiceWakePhrase, type VoiceSongCommand } from "./voice-command.js";
 import { inferVoiceCommand } from "./voice-intent.js";
 import {
   ManagedVoiceClientRegistry,
@@ -738,6 +738,7 @@ export class BotInstance extends EventEmitter {
       this.config.voiceRequest.enabled,
       voiceprintProfiles,
       this.config.voiceRequest.mode,
+      this.config.voiceRequest.wakePhrase,
     );
     this.registerManagedVoiceClient();
     this.profileManager.onConnect();
@@ -810,10 +811,11 @@ export class BotInstance extends EventEmitter {
     this.voiceDucking.updateSettings(settings);
   }
 
-  updateVoiceRequest(enabled: boolean, mode = this.config.voiceRequest.mode): void {
+  updateVoiceRequest(enabled: boolean, mode = this.config.voiceRequest.mode, wakePhrase = this.config.voiceRequest.wakePhrase): void {
     this.pendingVoiceCommands.clear();
     this.config.voiceRequest.enabled = enabled;
     this.config.voiceRequest.mode = mode;
+    this.config.voiceRequest.wakePhrase = wakePhrase;
     this.tsClient.setVoiceDataEnabled(this.connected && enabled);
     if (this.connected) {
       const voiceprintProfiles = this.database && typeof this.database.listVoiceprints === "function"
@@ -823,6 +825,7 @@ export class BotInstance extends EventEmitter {
         enabled,
         voiceprintProfiles,
         this.config.voiceRequest.mode,
+        wakePhrase,
       );
     }
     else this.voiceRequest.stop();
@@ -858,7 +861,8 @@ export class BotInstance extends EventEmitter {
 
   private async handleVoicePlayRequest(clientId: number, transcript: string): Promise<void> {
     if (!this.connected || !this.config.voiceRequest.enabled) return;
-    const parsed = analyzeVoiceCommand(transcript);
+    const wakePhrase = this.config.voiceRequest.wakePhrase;
+    const parsed = analyzeVoiceCommand(transcript, wakePhrase);
     const token = Symbol();
     const generation = this.lifecycleGeneration;
     this.pendingVoiceCommands.set(clientId, token);
@@ -869,7 +873,7 @@ export class BotInstance extends EventEmitter {
       let command = parsed === "blocked" ? null : parsed;
       if (parsed === null && this.config.voiceRequest.semanticFallback) {
         const started = performance.now();
-        command = await inferVoiceCommand(transcript);
+        command = await inferVoiceCommand(stripVoiceWakePhrase(transcript, wakePhrase));
         if (!isCurrent()) return;
         this.logger.info({ elapsedMs: Math.round(performance.now() - started), accepted: !!command }, "Local voice intent");
       }

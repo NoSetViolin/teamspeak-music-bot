@@ -1,6 +1,6 @@
 import { Worker } from "node:worker_threads";
 import { createOpusEncoder, type Encoder } from "../audio/encoder.js";
-import { ensureVoiceKeyword, missingVoiceModels, voiceModelPaths, type VoiceWakeMode } from "./voice-models.js";
+import { buildVoiceKeyword, missingVoiceModels, voiceModelPaths, WAKE_PHRASE, type VoiceWakeMode } from "./voice-models.js";
 import type { Logger } from "../logger.js";
 
 export interface IncomingVoice {
@@ -40,7 +40,12 @@ export class VoiceRequestController {
     private readonly callbacks: VoiceRequestCallbacks,
   ) {}
 
-  setEnabled(enabled: boolean, profiles: VoiceprintProfile[] = this.profiles, mode: VoiceWakeMode = this.mode): void {
+  setEnabled(
+    enabled: boolean,
+    profiles: VoiceprintProfile[] = this.profiles,
+    mode: VoiceWakeMode = this.mode,
+    wakePhrase = WAKE_PHRASE,
+  ): void {
     this.profiles = profiles;
     this.mode = mode;
     this.receivedPackets = 0;
@@ -54,11 +59,12 @@ export class VoiceRequestController {
       this.callbacks.onUnavailable("语音模型未安装，请运行 npm run setup:voice");
       return;
     }
+    let keywordLine: string;
     try {
-      ensureVoiceKeyword();
+      keywordLine = buildVoiceKeyword(wakePhrase, paths.kwsTokens);
     } catch (error) {
-      this.logger.error({ error }, "Could not update voice wake keyword");
-      this.callbacks.onUnavailable("无法更新语音唤醒词，请检查模型目录权限");
+      this.logger.error({ error, wakePhrase }, "Could not build voice wake keyword");
+      this.callbacks.onUnavailable("无法加载语音唤醒词，请检查语音点歌设置");
       return;
     }
     const generation = ++this.generation;
@@ -66,7 +72,7 @@ export class VoiceRequestController {
     let worker: Worker;
     try {
       worker = new Worker(new URL(workerFile, import.meta.url), {
-        workerData: { paths, mode, profiles: this.profiles },
+        workerData: { paths, mode, keywordLine, profiles: this.profiles },
         execArgv: workerFile.endsWith(".ts") ? ["--import", "tsx"] : [],
       });
     } catch (error) {
@@ -98,7 +104,7 @@ export class VoiceRequestController {
       if (generation !== this.generation) return;
       if (message.type === "ready") {
         this.ready = true;
-        this.logger.info({ mode, profiles: this.profiles.length, wakeEngine: message.wakeEngine }, "Local voice request recognition ready");
+        this.logger.info({ mode, wakePhrase, profiles: this.profiles.length, wakeEngine: message.wakeEngine }, "Local voice request recognition ready");
       } else if (message.type === "diagnostic") {
         this.logger.info(
           { stage: message.stage, clientId: message.id, samples: message.samples, ready: message.ready, matched: message.matched, closestProfile: message.closestProfile, similarity: message.similarity, threshold: message.threshold, text: message.text, rms: message.rms, peak: message.peak, packets: message.packets, elapsedMs: message.elapsedMs },

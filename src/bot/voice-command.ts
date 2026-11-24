@@ -1,4 +1,5 @@
 import type { Platform } from "../music/provider.js";
+import { WAKE_PHRASE } from "./voice-models.js";
 
 export type VoiceSongCommand = {
   name: "play" | "add" | "playnext";
@@ -146,10 +147,17 @@ export function voiceSourceWasSpoken(platform: Platform, normalizedTranscript: s
   return Object.entries(SOURCES).some(([phrase, source]) => source === platform && normalizedTranscript.includes(phrase));
 }
 
-export function analyzeVoiceCommand(transcript: string): VoiceCommand | "blocked" | null {
+export function stripVoiceWakePhrase(transcript: string, wakePhrase = WAKE_PHRASE): string {
+  const text = transcript.normalize("NFKC").replace(/<\|[^|]*\|>/g, "").trim();
+  if (wakePhrase === WAKE_PHRASE) return text.replace(/^布鲁斯[,、\s]*布鲁斯[,。!?\s]*/u, "");
+  if (!text.startsWith(wakePhrase)) return text;
+  const remainder = text.slice(wakePhrase.length);
+  return /^[,、。!?:\s]/u.test(remainder) ? remainder.replace(/^[,、。!?:\s]+/u, "") : text;
+}
+
+export function analyzeVoiceCommand(transcript: string, wakePhrase?: string): VoiceCommand | "blocked" | null {
   if (transcript.length > 300) return "blocked";
-  const text = transcript.normalize("NFKC").replace(/<\|[^|]*\|>/g, "").trim()
-    .replace(/^布鲁斯[,、\s]*布鲁斯[,。!?\s]*/u, "");
+  const text = stripVoiceWakePhrase(transcript, wakePhrase);
   const clauses: string[] = [];
   let start = 0;
   for (const match of text.matchAll(CLAUSE_BOUNDARY)) {

@@ -7,6 +7,7 @@ const SAMPLE_RATE = 16_000;
 const mode = workerData.mode as "voiceprint" | "keyword";
 const streamingWake = mode === "voiceprint";
 const modelPaths = workerData.paths as Record<string, string>;
+const keywordLine = workerData.keywordLine as string;
 const MAX_SPEAKERS = 8;
 const SPEAKER_IDLE_MS = 15_000;
 const COMMAND_TIMEOUT_MS = 8_000;
@@ -380,7 +381,8 @@ try {
       transducer: { encoder: modelPaths.encoder, decoder: modelPaths.decoder, joiner: modelPaths.joiner },
       tokens: modelPaths.kwsTokens, numThreads: 1, provider: "cpu", debug: 0,
     },
-    keywordsFile: modelPaths.keywords,
+    keywordsBuf: keywordLine,
+    keywordsBufSize: Buffer.byteLength(keywordLine, "utf8"),
     numTrailingBlanks: 1,
   });
   if (mode === "voiceprint") {

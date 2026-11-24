@@ -10,7 +10,7 @@ import {
 import { dirname } from "node:path";
 import type { BotAccess, GuestPermissions } from "./permissions.js";
 import { GUEST_PERMISSION_FLAGS } from "./permissions.js";
-import type { VoiceWakeMode } from "../bot/voice-models.js";
+import { normalizeVoiceWakePhrase, WAKE_PHRASE, type VoiceWakeMode } from "../bot/voice-models.js";
 
 export interface GuestModeConfig {
   enabled: boolean;
@@ -65,6 +65,7 @@ export interface VoiceRequestConfig {
   enabled: boolean;
   /** Voiceprint recognition is the default wake mechanism. */
   mode: VoiceWakeMode;
+  wakePhrase?: string;
   semanticFallback?: boolean;
 }
 
@@ -467,9 +468,11 @@ export function loadConfig(path: string): BotConfig {
           ? rawVolumePercent
           : defaults.voiceDucking.volumePercent,
     };
+    const voiceWakePhrase = normalizeVoiceWakePhrase(partial.voiceRequest?.wakePhrase);
     const voiceRequest: VoiceRequestConfig = {
       enabled: partial.voiceRequest?.enabled === true,
       mode: partial.voiceRequest?.mode === "keyword" ? "keyword" : "voiceprint",
+      ...(voiceWakePhrase && voiceWakePhrase !== WAKE_PHRASE ? { wakePhrase: voiceWakePhrase } : {}),
       ...(partial.voiceRequest?.semanticFallback === true ? { semanticFallback: true } : {}),
     };
 

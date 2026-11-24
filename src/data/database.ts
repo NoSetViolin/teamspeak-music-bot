@@ -43,6 +43,8 @@ export interface QueueStateRow {
   fmPlatform: string;
 }
 
+export const MAX_VOICEPRINT_NAME_LENGTH = 35;
+
 /** A locally stored speaker embedding bound to a TeamSpeak identity. */
 export interface VoiceprintRecord {
   id: string;
@@ -1056,7 +1058,7 @@ export function createDatabase(dbPath: string): BotDatabase {
       if (!input.scope || !input.name || !input.clientUid || input.embedding.length === 0) {
         throw new Error("Invalid voiceprint");
       }
-      if (input.name.length > 32 || input.embedding.length > 4096) {
+      if (input.name.length > MAX_VOICEPRINT_NAME_LENGTH || input.embedding.length > 4096) {
         throw new Error("Voiceprint is too large");
       }
       if (input.embedding.some((v) => !Number.isFinite(v))) {
